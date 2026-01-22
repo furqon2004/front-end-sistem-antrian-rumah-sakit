@@ -38,10 +38,13 @@ const fetchTicketStatuses = async () => {
   const validTickets = []
   const statusPromises = tickets.value.map(async (ticket) => {
     try {
-      // Use token for status API, fallback to id
-      // API expects token from public_queue_token table
-      let ticketToken = ticket.token || ticket.id
-      if (typeof ticketToken === 'object' && ticketToken !== null) {
+      // Use token for status API - token is from public_queue_token table
+      // Note: ticket.id is queue_ticket_id, ticket.token is the actual token
+      let ticketToken = ticket.token
+      if (!ticketToken) {
+        console.warn('⚠️ Ticket missing token field:', ticket)
+        ticketToken = ''
+      } else if (typeof ticketToken === 'object' && ticketToken !== null) {
         ticketToken = ticketToken.id || String(ticketToken)
       } else {
         ticketToken = String(ticketToken)
@@ -104,7 +107,7 @@ const fetchTicketStatuses = async () => {
         status: currentStatus,
         // Add real-time data from queue check
         ai_prediction: queueCheck?.ai_prediction,
-        remaining_queues: queueCheck?.remaining_queues,
+        queues_ahead: queueCheck?.remaining_queues,
         estimated_wait_minutes: queueCheck?.estimated_waiting_minutes,
         current_queue: queueCheck?.current_queue,
         statusError: null
@@ -386,7 +389,7 @@ const getStatusColor = (status) => {
                 <div>
                   <p class="text-xs text-gray-600 mb-1">Antrian di Depan</p>
                   <p class="text-lg font-bold text-blue-600">
-                    {{ ticket.remaining_queues ?? 0 }}
+                    {{ ticket.queues_ahead ?? 0 }}
                   </p>
                 </div>
                 <div>
@@ -454,7 +457,7 @@ const getStatusColor = (status) => {
                 <Ticket class="w-5 h-5 text-gray-400 mt-0.5" />
                 <div>
                   <p class="text-sm text-gray-600">Token</p>
-                  <p class="font-mono text-xs break-all">{{ ticket.id }}</p>
+                  <p class="font-mono text-xs break-all">{{ ticket.token || '-' }}</p>
                 </div>
               </div>
             </div>

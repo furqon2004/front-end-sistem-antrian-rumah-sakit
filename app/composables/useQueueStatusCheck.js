@@ -99,27 +99,47 @@ export const useQueueStatusCheck = () => {
         
         // Calculate CORRECT remaining queues based on available data
         // Priority:
-        // 1. ai_prediction.factors.queue_load (most accurate, represents actual waiting)
-        // 2. Fallback: queue_number difference (less accurate if tickets are cancelled/completed)
+        // 1. queues_ahead from API response (most accurate if provided)
+        // 2. ai_prediction.factors.queue_load - 1 (total waiting minus self)
+        // 3. Fallback: queue_number difference (less accurate)
         let calculatedRemaining = 0
         const userQueueNumber = ticketData.queue_number || 0
         const currentQueue = directResponse.data.current_queue
         const aiPrediction = directResponse.data.ai_prediction
         
-        // Try to get queue_load from AI prediction (this is actual waiting count)
-        if (aiPrediction?.factors?.queue_load !== undefined) {
+        console.log('📊 API Response data:', {
+          queues_ahead: directResponse.data.queues_ahead,
+          queue_load: aiPrediction?.factors?.queue_load,
+          userQueueNumber,
+          currentQueue: currentQueue?.queue_number
+        })
+        
+        // Priority 1: Use queues_ahead directly from API if available
+        if (directResponse.data.queues_ahead !== undefined && directResponse.data.queues_ahead !== null) {
+          calculatedRemaining = Math.max(0, directResponse.data.queues_ahead)
+          console.log('📊 Using API queues_ahead:', calculatedRemaining)
+        }
+        // Priority 2: Use queue_load from AI prediction (total waiting including self)
+        else if (aiPrediction?.factors?.queue_load !== undefined) {
           // queue_load includes the current user, so subtract 1 to get people AHEAD
           calculatedRemaining = Math.max(0, aiPrediction.factors.queue_load - 1)
           console.log('📊 Using AI queue_load:', aiPrediction.factors.queue_load, '-> ahead:', calculatedRemaining)
-        } else if (currentQueue && currentQueue.queue_number) {
-          // Fallback: People ahead = user's number - currently serving number - 1
+        }
+        // Priority 3: Use waiting_count if available (total waiting)
+        else if (directResponse.data.waiting_count !== undefined) {
+          // waiting_count is total, subtract 1 for people ahead
+          calculatedRemaining = Math.max(0, directResponse.data.waiting_count - 1)
+          console.log('📊 Using waiting_count:', directResponse.data.waiting_count, '-> ahead:', calculatedRemaining)
+        }
+        // Fallback: queue_number based calculation
+        else if (currentQueue && currentQueue.queue_number) {
+          // People ahead = user's number - currently serving number - 1
           calculatedRemaining = Math.max(0, userQueueNumber - currentQueue.queue_number - 1)
           console.log('📊 Using queue_number diff:', { userQueueNumber, current: currentQueue.queue_number, ahead: calculatedRemaining })
         } else {
-          // No current queue being served, check if we're the only one
-          // If user is first (queue_number = 1), no one ahead
+          // Last fallback: assume position based on queue_number (least accurate)
           calculatedRemaining = Math.max(0, userQueueNumber - 1)
-          console.log('📊 No current serving, ahead:', calculatedRemaining)
+          console.log('📊 Fallback queue_number - 1:', calculatedRemaining)
         }
         
         // Return full data including AI prediction with CORRECTED remaining_queues

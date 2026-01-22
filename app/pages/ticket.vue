@@ -521,5 +521,54 @@ Tindakan ini tidak dapat dibatalkan."
   .print\:hidden {
     display: none !important;
   }
+  
+  /* Make tickets smaller for printing */
+  .max-w-6xl {
+    max-width: 100% !important;
+    padding: 0 !important;
+  }
+  
+  /* Ticket grid - single column, narrow tickets */
+  .grid.md\:grid-cols-2 {
+    display: block !important;
+  }
+  
+  /* Each ticket card - narrower for receipt-style printing */
+  .grid.md\:grid-cols-2 > div {
+    max-width: 300px !important;
+    margin: 0 auto 20px auto !important;
+    page-break-inside: avoid;
+    border: 1px solid #ddd !important;
+    border-radius: 8px !important;
+  }
+  
+  /* Smaller padding inside ticket */
+  .grid.md\:grid-cols-2 > div .p-6 {
+    padding: 12px !important;
+  }
+  
+  .grid.md\:grid-cols-2 > div .p-4 {
+    padding: 8px !important;
+  }
+  
+  /* Smaller text */
+  .grid.md\:grid-cols-2 > div .text-5xl {
+    font-size: 2.5rem !important;
+  }
+  
+  .grid.md\:grid-cols-2 > div .text-lg {
+    font-size: 1rem !important;
+  }
+  
+  /* Smaller QR code */
+  .grid.md\:grid-cols-2 > div img {
+    max-width: 120px !important;
+    margin: 0 auto !important;
+  }
+  
+  /* Hide AI prediction section on print */
+  .bg-gradient-to-r.from-blue-50.to-indigo-50 {
+    display: none !important;
+  }
 }
 </style>

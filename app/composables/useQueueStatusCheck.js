@@ -97,12 +97,36 @@ export const useQueueStatusCheck = () => {
           return { exists: false, status: status }
         }
         
-        // Return full data including AI prediction
+        // Calculate CORRECT remaining queues based on queue numbers
+        // API's remaining_queues is total tickets issued, NOT people waiting ahead
+        // Proper calculation: user's queue_number - current served queue_number - 1
+        let calculatedRemaining = 0
+        const userQueueNumber = ticketData.queue_number || 0
+        const currentQueue = directResponse.data.current_queue
+        
+        if (currentQueue && currentQueue.queue_number) {
+          // People ahead = user's number - currently serving number
+          // If user is A-008 and current is A-005, there are 2 people ahead (A-006, A-007)
+          calculatedRemaining = Math.max(0, userQueueNumber - currentQueue.queue_number - 1)
+        } else {
+          // No current queue being served, user might be first
+          // If user is first (queue_number = 1), no one ahead
+          calculatedRemaining = Math.max(0, userQueueNumber - 1)
+        }
+        
+        console.log('📊 Queue calculation:', { 
+          userQueueNumber, 
+          currentServing: currentQueue?.queue_number || 0,
+          calculatedRemaining,
+          apiRemaining: directResponse.data.remaining_queues
+        })
+        
+        // Return full data including AI prediction with CORRECTED remaining_queues
         return { 
           exists: true, 
           status: status,
           ai_prediction: directResponse.data.ai_prediction,
-          remaining_queues: directResponse.data.remaining_queues,
+          remaining_queues: calculatedRemaining, // Use our calculated value
           estimated_waiting_minutes: directResponse.data.estimated_waiting_minutes,
           current_queue: directResponse.data.current_queue
         }

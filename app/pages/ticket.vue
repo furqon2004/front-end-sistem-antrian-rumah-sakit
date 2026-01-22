@@ -386,7 +386,7 @@ const getStatusColor = (status) => {
                 <div>
                   <p class="text-xs text-gray-600 mb-1">Antrian di Depan</p>
                   <p class="text-lg font-bold text-blue-600">
-                    {{ Math.max(0, (ticket.remaining_queues !== undefined ? ticket.remaining_queues : (ticket.waiting_count || 0)) - 1) }}
+                    {{ ticket.remaining_queues ?? 0 }}
                   </p>
                 </div>
                 <div>

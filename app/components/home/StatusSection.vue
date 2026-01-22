@@ -88,9 +88,8 @@ const loadUserQueueStatus = async () => {
           status: result.status === 'CALLED' || result.status === 'SERVING' ? 'serving' : 'active',
           // Use display_number or ticket_number for full format like "A-003"
           current: ticket.display_number || ticket.ticket_number || ticket.queue_number,
-          // remaining_queues shows people ahead of you (not including yourself)
-          // If API includes user in count, subtract 1
-          waiting: Math.max(0, (result.remaining_queues ?? 1) - 1),
+          // remaining_queues now shows correct count of people ahead (calculated in useQueueStatusCheck)
+          waiting: result.remaining_queues ?? 0,
           eta: result.estimated_waiting_minutes ?? 15,
           doctorName: doctorName,
           ticketStatus: result.status

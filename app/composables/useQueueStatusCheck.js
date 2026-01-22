@@ -97,29 +97,30 @@ export const useQueueStatusCheck = () => {
           return { exists: false, status: status }
         }
         
-        // Calculate CORRECT remaining queues based on queue numbers
-        // API's remaining_queues is total tickets issued, NOT people waiting ahead
-        // Proper calculation: user's queue_number - current served queue_number - 1
+        // Calculate CORRECT remaining queues based on available data
+        // Priority:
+        // 1. ai_prediction.factors.queue_load (most accurate, represents actual waiting)
+        // 2. Fallback: queue_number difference (less accurate if tickets are cancelled/completed)
         let calculatedRemaining = 0
         const userQueueNumber = ticketData.queue_number || 0
         const currentQueue = directResponse.data.current_queue
+        const aiPrediction = directResponse.data.ai_prediction
         
-        if (currentQueue && currentQueue.queue_number) {
-          // People ahead = user's number - currently serving number
-          // If user is A-008 and current is A-005, there are 2 people ahead (A-006, A-007)
+        // Try to get queue_load from AI prediction (this is actual waiting count)
+        if (aiPrediction?.factors?.queue_load !== undefined) {
+          // queue_load includes the current user, so subtract 1 to get people AHEAD
+          calculatedRemaining = Math.max(0, aiPrediction.factors.queue_load - 1)
+          console.log('📊 Using AI queue_load:', aiPrediction.factors.queue_load, '-> ahead:', calculatedRemaining)
+        } else if (currentQueue && currentQueue.queue_number) {
+          // Fallback: People ahead = user's number - currently serving number - 1
           calculatedRemaining = Math.max(0, userQueueNumber - currentQueue.queue_number - 1)
+          console.log('📊 Using queue_number diff:', { userQueueNumber, current: currentQueue.queue_number, ahead: calculatedRemaining })
         } else {
-          // No current queue being served, user might be first
+          // No current queue being served, check if we're the only one
           // If user is first (queue_number = 1), no one ahead
           calculatedRemaining = Math.max(0, userQueueNumber - 1)
+          console.log('📊 No current serving, ahead:', calculatedRemaining)
         }
-        
-        console.log('📊 Queue calculation:', { 
-          userQueueNumber, 
-          currentServing: currentQueue?.queue_number || 0,
-          calculatedRemaining,
-          apiRemaining: directResponse.data.remaining_queues
-        })
         
         // Return full data including AI prediction with CORRECTED remaining_queues
         return { 

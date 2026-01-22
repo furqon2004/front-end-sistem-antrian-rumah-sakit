@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { Clock, Activity, AlertCircle, Users } from 'lucide-vue-next'
 
 defineEmits(['selectQueue'])
@@ -9,6 +9,14 @@ const props = defineProps({
     type: Object,
     required: true
   }
+})
+
+// Track if component is mounted (client-side) to avoid SSR hydration mismatch
+const isMounted = ref(false)
+
+onMounted(() => {
+  // Set mounted after a small delay to ensure hydration is complete
+  isMounted.value = true
 })
 
 // Format average service time
@@ -21,6 +29,7 @@ const formatServiceTime = (minutes) => {
 }
 
 // Calculate Status based on Service Hours
+// IMPORTANT: Only calculate actual open/closed status on client-side to prevent SSR mismatch
 const statusInfo = computed(() => {
   if (!props.queueType.is_active) {
     return { isClosed: true, label: 'Tidak Aktif', color: 'bg-gray-200 text-gray-700' }
@@ -28,11 +37,17 @@ const statusInfo = computed(() => {
 
   const hours = props.queueType.service_hours
   if (!hours || !hours.is_active) {
-     // If no hours defined, assume open (or could be closed default)
+     // If no hours defined, assume open
      return { isClosed: false, label: 'Buka', color: 'bg-green-100 text-green-700' }
   }
 
-  // Check time
+  // CRITICAL: During SSR or before hydration, always return "open" state
+  // This prevents hydration mismatch due to timezone differences
+  if (!isMounted.value) {
+    return { isClosed: false, label: 'Buka', color: 'bg-green-100 text-green-700' }
+  }
+
+  // Check time - only runs on client after mount
   const now = new Date()
   const currentHours = now.getHours()
   const currentMinutes = now.getMinutes()

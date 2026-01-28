@@ -1,22 +1,18 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import StatCard from '@/components/home/StatCard.vue'
-import { Users, Clock, Stethoscope, Activity } from 'lucide-vue-next'
+import { Users, Stethoscope, Activity, Clock } from 'lucide-vue-next'
 
 // Stats data - will be fetched from API
 const stats = ref({
-  totalPatientsToday: 0,
-  avgWaitTime: 0,
+  completedPatientsToday: 0, // Only DONE status patients
+  waitingQueueCount: 0, // Patients currently waiting
   activeDoctors: 0,
   activePolys: 0
 })
 const loading = ref(true)
 
-// Format wait time
-const formatWaitTime = (minutes) => {
-  if (!minutes) return '0 min'
-  return `${minutes} min`
-}
+
 
 // Fetch stats from API
 const fetchStats = async () => {
@@ -60,16 +56,15 @@ const fetchStats = async () => {
             // Structure: { staff: {...}, dashboard: [{ total_today, waiting, done, ... }] }
             const dashboardItems = result.data.dashboard || []
             if (dashboardItems.length > 0) {
-              // Sum up total_today from all polys
+              // Sum up stats from all polys
               const totalToday = dashboardItems.reduce((sum, item) => sum + (item.total_today || 0), 0)
               const totalDone = dashboardItems.reduce((sum, item) => sum + (item.done || 0), 0)
-              const avgWaitSum = dashboardItems.reduce((sum, item) => sum + (item.avg_waiting_time || 0), 0)
-              const avgWait = dashboardItems.length > 0 ? Math.round(avgWaitSum / dashboardItems.length) : 0
+              const totalWaiting = dashboardItems.reduce((sum, item) => sum + (item.waiting || 0), 0)
               
               dashboardData = {
                 totalPatientsToday: totalToday,
                 completedToday: totalDone,
-                avgWaitTime: avgWait
+                waitingCount: totalWaiting
               }
               console.log('📊 Got stats from staff dashboard:', dashboardData)
             }
@@ -199,10 +194,10 @@ const fetchStats = async () => {
       console.error('Error fetching doctors:', e)
     }
     
-    // Combine data
+    // Combine data - only show completed (DONE) patients
     stats.value = {
-      totalPatientsToday: dashboardData?.totalPatientsToday || dashboardData?.total_today || totalPatients,
-      avgWaitTime: dashboardData?.avgWaitTime || dashboardData?.avg_waiting_time || avgWait,
+      completedPatientsToday: dashboardData?.completedToday || dashboardData?.totalPatientsToday || 0,
+      waitingQueueCount: dashboardData?.waitingCount || dashboardData?.waiting || 0,
       activeDoctors: dashboardData?.activeDoctors || activeDoctorsCount,
       activePolys: dashboardData?.activePolys || activePolysCount
     }
@@ -224,13 +219,13 @@ onMounted(() => {
     <div class="grid md:grid-cols-4 gap-6">
       <StatCard 
         :icon="Users" 
-        label="Total Pasien Hari Ini" 
-        :value="loading ? '...' : stats.totalPatientsToday.toString()"
+        label="Total Pasien Selesai Hari Ini" 
+        :value="loading ? '...' : stats.completedPatientsToday.toString()"
       />
       <StatCard 
         :icon="Clock" 
-        label="Rata-rata Waktu Tunggu" 
-        :value="loading ? '...' : formatWaitTime(stats.avgWaitTime)"
+        label="Total Antrian Menunggu" 
+        :value="loading ? '...' : stats.waitingQueueCount.toString()"
       />
       <StatCard 
         :icon="Stethoscope" 

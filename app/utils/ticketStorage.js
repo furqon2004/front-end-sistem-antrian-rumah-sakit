@@ -55,19 +55,41 @@ export const ticketStorage = {
   },
 
   /**
-   * Check if user has a ticket for specific queue type
+   * Check if user has an ACTIVE ticket for specific queue type
+   * Only blocks if ticket status is WAITING, CALLED, or SERVING
+   * Allows taking new ticket if previous is DONE, CANCELLED, or SKIPPED
    */
   hasTicketForQueue(queueTypeId) {
     const tickets = this.getTickets()
-    return tickets.some(ticket => ticket.queue_type_id === queueTypeId)
+    const ACTIVE_STATUSES = ['WAITING', 'CALLED', 'SERVING', 'waiting', 'called', 'serving']
+    
+    return tickets.some(ticket => {
+      const isMatchingQueue = ticket.queue_type_id === queueTypeId
+      const isActiveStatus = ACTIVE_STATUSES.includes(ticket.status)
+      
+      if (isMatchingQueue) {
+        console.log(`🎫 Checking ticket for queue ${queueTypeId}:`, {
+          status: ticket.status,
+          isActive: isActiveStatus
+        })
+      }
+      
+      return isMatchingQueue && isActiveStatus
+    })
   },
 
   /**
-   * Get ticket for specific queue type
+   * Get ACTIVE ticket for specific queue type
+   * Only returns tickets with status WAITING, CALLED, or SERVING
    */
   getTicketForQueue(queueTypeId) {
     const tickets = this.getTickets()
-    return tickets.find(ticket => ticket.queue_type_id === queueTypeId)
+    const ACTIVE_STATUSES = ['WAITING', 'CALLED', 'SERVING', 'waiting', 'called', 'serving']
+    
+    return tickets.find(ticket => 
+      ticket.queue_type_id === queueTypeId && 
+      ACTIVE_STATUSES.includes(ticket.status)
+    )
   },
 
   /**

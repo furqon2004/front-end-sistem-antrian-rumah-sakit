@@ -96,6 +96,11 @@ export const useQueueTypes = () => {
              if (doc.schedules && Array.isArray(doc.schedules)) {
                const todaySchedule = doc.schedules.find(s => s.day_of_week === dayOfWeek)
                if (todaySchedule) {
+                 console.log(`📊 Doctor ${doc.name} (poly_id: ${polyId}) schedule:`, {
+                   max_quota: todaySchedule.max_quota,
+                   remaining_quota: todaySchedule.remaining_quota,
+                   day_of_week: todaySchedule.day_of_week
+                 })
                  totalMaxQuota += (todaySchedule.max_quota || 0)
                  // Use remaining_quota from API which decreases when patient checks out
                  totalRemainingQuota += (todaySchedule.remaining_quota !== undefined 
@@ -104,6 +109,8 @@ export const useQueueTypes = () => {
                }
              }
           })
+          
+          console.log(`📈 Poly ${polyId} Total Quota:`, { maxQuota: totalMaxQuota, remainingQuota: totalRemainingQuota })
           return { maxQuota: totalMaxQuota, remainingQuota: totalRemainingQuota }
         } catch (e) {
           return { maxQuota: 0, remainingQuota: 0 }
@@ -113,39 +120,65 @@ export const useQueueTypes = () => {
       // Helper to get service hours for a poly from doctor schedules
       const getPolyServiceHours = (polyId) => {
         try {
-          // First try from polys data
+          // STRATEGY: Prioritize Doctor Schedules
+          // If any doctor has a schedule today, use the combined range (Earliest Open - Latest Close)
+          // Fallback to Poly Service Hours only if no doctors are scheduled
+          
+          const activeDoctors = doctors.filter(d => d.poly_id === polyId)
+          const todaysSchedules = []
+          
+          // Collect all schedules for today
+          activeDoctors.forEach(doc => {
+            if (doc.schedules && Array.isArray(doc.schedules)) {
+              const todaySchedule = doc.schedules.find(s => s.day_of_week === dayOfWeek)
+              if (todaySchedule) {
+                todaysSchedules.push(todaySchedule)
+              }
+            }
+          })
+          
+          // If we have doctor schedules, calculate min-max range
+          if (todaysSchedules.length > 0) {
+            // Sort by start_time to find earliest
+            todaysSchedules.sort((a, b) => a.start_time.localeCompare(b.start_time))
+            const earliestOpen = todaysSchedules[0].start_time
+            
+            // Sort by end_time to find latest
+            todaysSchedules.sort((a, b) => b.end_time.localeCompare(a.end_time))
+            const latestClose = todaysSchedules[0].end_time
+            
+            console.log(`  🕒 Poly ${polyId} Hours (from ${todaysSchedules.length} docs): ${earliestOpen} - ${latestClose}`)
+            
+            return {
+              open_time: earliestOpen,
+              close_time: latestClose,
+              day_of_week: dayOfWeek,
+              is_active: true,
+              source: 'doctor_schedules'
+            }
+          }
+
+          // Fallback: Try from polys data (static hours)
           const poly = polys.find(p => p.id === polyId)
           if (poly) {
-            // Try to find schedule for today
             if (poly.service_hours && Array.isArray(poly.service_hours)) {
               const todayHours = poly.service_hours.find(h => h.day_of_week === dayOfWeek)
-              if (todayHours) return todayHours
+              if (todayHours) {
+                 console.log(`  CLOCK Poly ${polyId} Hours (static): ${todayHours.open_time} - ${todayHours.close_time}`)
+                 return { ...todayHours, source: 'poly_static' }
+              }
             }
             
+            // Legacy format fallback
             if (poly.schedules && Array.isArray(poly.schedules)) {
                const todaySch = poly.schedules.find(s => s.day_of_week === dayOfWeek)
                if (todaySch) return todaySch
             }
           }
           
-          // Fallback: Try to get from doctor schedules
-          const activeDoctors = doctors.filter(d => d.poly_id === polyId)
-          for (const doc of activeDoctors) {
-            if (doc.schedules && Array.isArray(doc.schedules)) {
-              const todaySchedule = doc.schedules.find(s => s.day_of_week === dayOfWeek)
-              if (todaySchedule) {
-                return {
-                  open_time: todaySchedule.start_time,
-                  close_time: todaySchedule.end_time,
-                  day_of_week: dayOfWeek,
-                  is_active: true
-                }
-              }
-            }
-          }
-          
           return null
         } catch (e) {
+          console.error('Error calculating service hours:', e)
           return null
         }
       }
@@ -168,6 +201,31 @@ export const useQueueTypes = () => {
           const serviceHour = getPolyServiceHours(polyId)
           const quotaInfo = getPolyQuotaInfo(polyId)
           
+          // Get doctors available TODAY for this poly
+          const availableDoctors = doctors
+            .filter(doc => doc.poly_id === polyId)
+            .filter(doc => {
+              if (!doc.schedules || !Array.isArray(doc.schedules)) return false
+              return doc.schedules.some(s => s.day_of_week === dayOfWeek)
+            })
+            .map(doc => {
+              const todaySchedule = doc.schedules.find(s => s.day_of_week === dayOfWeek)
+              return {
+                id: doc.id,
+                name: doc.name,
+                specialization: doc.specialization,
+                schedule: todaySchedule ? {
+                  start_time: todaySchedule.start_time,
+                  end_time: todaySchedule.end_time,
+                  max_quota: todaySchedule.max_quota,
+                  remaining_quota: todaySchedule.remaining_quota
+                } : null
+              }
+            })
+          
+          console.log(`👨‍⚕️ Poly ${polyId} has ${availableDoctors.length} doctors today:`, 
+            availableDoctors.map(d => d.name))
+          
           // Use remaining_quota from schedules directly
           const todayCount = quotaInfo.maxQuota - quotaInfo.remainingQuota
           
@@ -176,7 +234,8 @@ export const useQueueTypes = () => {
             service_hours: serviceHour, // { open_time: "08:00", close_time: "16:00", ... }
             quota: quotaInfo.maxQuota,
             remaining_quota: quotaInfo.remainingQuota,
-            today_count: todayCount
+            today_count: todayCount,
+            available_doctors: availableDoctors // NEW: list of doctors for this poly today
           }
         })
 
@@ -185,8 +244,10 @@ export const useQueueTypes = () => {
       throw err
     }
   }, {
-    // Cache options (optional)
-    watch: false
+    // Disable caching to always fetch fresh data
+    // This ensures admin changes (schedules, polys, etc.) are immediately reflected
+    watch: false,
+    getCachedData: () => undefined // Force fresh fetch every time
   })
   
   return {

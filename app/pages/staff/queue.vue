@@ -1,5 +1,5 @@
 <script setup>
-import { Phone, SkipForward, RefreshCw, Play, CheckCircle, Clock, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-vue-next'
+import { Phone, SkipForward, RefreshCw, Play, CheckCircle, Clock, ChevronLeft, ChevronRight, RotateCcw, Stethoscope, Users } from 'lucide-vue-next'
 import StaffLayout from '@/components/staff/StaffLayout.vue'
 import ConfirmModal from '@/components/common/ConfirmModal.vue'
 
@@ -17,6 +17,7 @@ onMounted(() => {
 const {
   getQueueList,
   getSkippedQueue,
+  getDoctorsList,
   callNext,
   skipTicket,
   recallTicket,
@@ -31,13 +32,20 @@ const { getQueueTypes } = useAdminQueueTypes()
 const queueTypesMap = ref({})
 
 // State
-const currentTicket = ref(null)
-const waitingQueue = ref([])
+const allQueueData = ref([]) // Raw queue data from API
+const currentTicket = ref(null) // Currently selected doctor's active ticket
+const currentTicketsByDoctor = ref({}) // Map: doctorId -> current ticket (CALLED/SERVING)
+const waitingQueue = ref([]) // Filtered by selected doctor
+const waitingQueueByDoctor = ref({}) // Map: doctorId -> waiting tickets
 const skippedQueue = ref([])
 const loading = ref(true)
 const actionLoading = ref(false)
 const error = ref(null)
 const successMessage = ref(null)
+
+// Doctor state
+const doctors = ref([]) // List of doctors for this poly
+const selectedDoctorId = ref(null) // Currently selected doctor filter (null = all)
 
 // Dashboard Stats
 const dashboardStats = ref({
@@ -160,17 +168,72 @@ const fetchQueue = async () => {
     await fetchQueueTypes()
   }
   
+  // Fetch dashboard stats first to get staff's poly_id
+  const statsResult = await getDashboardStats()
+  if (statsResult.success) {
+    dashboardStats.value = statsResult.data
+  }
+  
+  // Get staff's poly_id for filtering doctors
+  const staffPolyId = dashboardStats.value.poly_id
+  
+  // Fetch doctors list filtered by staff's poly
+  const doctorsResult = await getDoctorsList(staffPolyId)
+  if (doctorsResult.success) {
+    doctors.value = doctorsResult.data
+    console.log('👨‍⚕️ Loaded doctors for poly', staffPolyId, ':', doctors.value.map(d => d.name))
+  }
+  
   // Fetch today's queue (WAITING, CALLED, SERVING)
   const result = await getQueueList()
   
   if (result.success) {
     const data = result.data.map(enrichTicketWithQueueType)
+    allQueueData.value = data
     
-    // Find current ticket (CALLED or SERVING)
-    currentTicket.value = data.find(t => t.status === 'CALLED' || t.status === 'SERVING') || null
+    // Group current tickets (CALLED/SERVING) by doctor_id
+    const currentByDoctor = {}
+    const waitingByDoctor = {}
     
-    // Get waiting queue only (exclude CANCELLED and SKIPPED)
-    waitingQueue.value = data.filter(t => t.status === 'WAITING')
+    // Initialize empty arrays for each doctor
+    doctors.value.forEach(doc => {
+      currentByDoctor[doc.id] = null
+      waitingByDoctor[doc.id] = []
+    })
+    // Also handle tickets without doctor_id (for backwards compatibility)
+    currentByDoctor['unassigned'] = null
+    waitingByDoctor['unassigned'] = []
+    
+    // Categorize each ticket
+    console.log('🎫 Processing tickets, checking doctor_id:', data.map(t => ({ id: t.id, display: t.display_number, doctor_id: t.doctor_id, status: t.status })))
+    
+    data.forEach(ticket => {
+      const doctorId = ticket.doctor_id || 'unassigned'
+      
+      if (ticket.status === 'CALLED' || ticket.status === 'SERVING') {
+        // Current ticket for this doctor
+        if (!currentByDoctor[doctorId]) {
+          currentByDoctor[doctorId] = ticket
+        }
+      } else if (ticket.status === 'WAITING') {
+        // Waiting queue for this doctor
+        if (!waitingByDoctor[doctorId]) {
+          waitingByDoctor[doctorId] = []
+        }
+        waitingByDoctor[doctorId].push(ticket)
+      }
+    })
+    
+    console.log('📊 Grouped by doctor:', { 
+      currentByDoctor: Object.fromEntries(Object.entries(currentByDoctor).map(([k, v]) => [k, v?.display_number || null])),
+      waitingByDoctor: Object.fromEntries(Object.entries(waitingByDoctor).map(([k, v]) => [k, v.length]))
+    })
+    
+    currentTicketsByDoctor.value = currentByDoctor
+    waitingQueueByDoctor.value = waitingByDoctor
+    
+    // Set current view based on selected doctor
+    updateCurrentView()
   } else {
     error.value = result.error
   }
@@ -181,19 +244,49 @@ const fetchQueue = async () => {
     skippedQueue.value = skippedResult.data.map(enrichTicketWithQueueType)
   }
   
-  // Fetch dashboard stats
-  await fetchStats()
-  
   loading.value = false
 }
 
-// Call next ticket
-const handleCallNext = async () => {
+// Update current view based on selected doctor
+const updateCurrentView = () => {
+  if (selectedDoctorId.value) {
+    // Show specific doctor's queue
+    currentTicket.value = currentTicketsByDoctor.value[selectedDoctorId.value] || null
+    waitingQueue.value = waitingQueueByDoctor.value[selectedDoctorId.value] || []
+  } else {
+    // Show all - first found current ticket and all waiting
+    currentTicket.value = Object.values(currentTicketsByDoctor.value).find(t => t) || null
+    waitingQueue.value = Object.values(waitingQueueByDoctor.value).flat()
+  }
+}
+
+// Watch for doctor selection change
+watch(selectedDoctorId, () => {
+  updateCurrentView()
+})
+
+// Computed: doctors with active tickets count
+const doctorsWithCounts = computed(() => {
+  return doctors.value.map(doc => ({
+    ...doc,
+    currentTicket: currentTicketsByDoctor.value[doc.id],
+    waitingCount: (waitingQueueByDoctor.value[doc.id] || []).length,
+    hasActiveTicket: !!currentTicketsByDoctor.value[doc.id]
+  }))
+})
+
+// Check if multiple doctors are available
+const hasMultipleDoctors = computed(() => doctors.value.length > 1)
+
+// Call next ticket (for selected doctor if multiple doctors)
+const handleCallNext = async (doctorId = null) => {
   actionLoading.value = true
   error.value = null
   successMessage.value = null
   
-  const result = await callNext()
+  // Use provided doctorId or fall back to selected doctor
+  const targetDoctorId = doctorId || selectedDoctorId.value
+  const result = await callNext(targetDoctorId)
   
   if (result.success) {
     successMessage.value = result.message
@@ -338,6 +431,81 @@ const confirmComplete = async () => {
   actionLoading.value = false
 }
 
+// ============ Per-Doctor Action Handlers ============
+// These functions handle actions for specific doctor's tickets
+
+const handleRecallForDoctor = async (doc) => {
+  if (!doc.currentTicket) return
+  actionLoading.value = true
+  error.value = null
+  successMessage.value = null
+  
+  const result = await recallTicket(doc.currentTicket.id)
+  
+  if (result.success) {
+    successMessage.value = `${doc.name}: ${result.message}`
+    await fetchQueue()
+  } else {
+    error.value = result.error
+  }
+  
+  actionLoading.value = false
+}
+
+const handleSkipForDoctor = async (doc) => {
+  if (!doc.currentTicket) return
+  actionLoading.value = true
+  error.value = null
+  successMessage.value = null
+  
+  const result = await skipTicket(doc.currentTicket.id)
+  
+  if (result.success) {
+    successMessage.value = `${doc.name}: ${result.message}`
+    await fetchQueue()
+  } else {
+    error.value = result.error
+  }
+  
+  actionLoading.value = false
+}
+
+const handleStartForDoctor = async (doc) => {
+  if (!doc.currentTicket) return
+  actionLoading.value = true
+  error.value = null
+  successMessage.value = null
+  
+  const result = await startService(doc.currentTicket.id)
+  
+  if (result.success) {
+    successMessage.value = `${doc.name}: Layanan dimulai`
+    await fetchQueue()
+  } else {
+    error.value = result.error
+  }
+  
+  actionLoading.value = false
+}
+
+const handleFinishForDoctor = async (doc) => {
+  if (!doc.currentTicket) return
+  actionLoading.value = true
+  error.value = null
+  successMessage.value = null
+  
+  const result = await finishService(doc.currentTicket.id)
+  
+  if (result.success) {
+    successMessage.value = `${doc.name}: Layanan selesai`
+    await fetchQueue()
+  } else {
+    error.value = result.error
+  }
+  
+  actionLoading.value = false
+}
+
 // Auto-refresh every 3 seconds
 let refreshInterval = null
 
@@ -419,102 +587,136 @@ watch([successMessage, error], () => {
       </div>
 
       <div v-else class="space-y-6">
-        <!-- Current Ticket -->
-        <div class="bg-white rounded-2xl p-8 shadow-lg border-2 border-black">
-          <h2 class="text-lg font-semibold text-gray-700 mb-4">
-            Nomor Saat Ini
+        <!-- Doctor Tabs (when multiple doctors available) -->
+        
+
+        <!-- Per-Doctor Grid Cards (when multiple doctors) -->
+        <div v-if="hasMultipleDoctors" class="space-y-4">
+          <h2 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Stethoscope class="w-5 h-5" />
+            Kelola Antrian Per Dokter
           </h2>
           
-          <div v-if="currentTicket" class="space-y-6">
-            <!-- Large Display Number -->
-            <div class="text-center py-8 bg-black text-white rounded-xl">
-              <p class="text-6xl font-bold mb-2">
-                {{ currentTicket.display_number }}
-              </p>
-              <p :class="['inline-block px-4 py-2 rounded-full text-sm font-medium border', statusColors[currentTicket.status]]">
-                {{ currentTicket.status }}
-              </p>
-            </div>
-
-            <!-- Ticket Info -->
-            <div class="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <p class="text-gray-600">Waktu Ambil</p>
-                <p class="font-semibold">{{ new Date(currentTicket.issued_at).toLocaleTimeString('id-ID') }}</p>
+          <div :class="[
+            'grid gap-4',
+            doctors.length === 2 ? 'grid-cols-1 md:grid-cols-2' : 
+            doctors.length >= 3 ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 
+            'grid-cols-1'
+          ]">
+            <div 
+              v-for="doc in doctorsWithCounts" 
+              :key="doc.id"
+              :class="[
+                'bg-white rounded-2xl p-6 border-2 transition shadow-sm',
+                doc.hasActiveTicket ? 'border-green-400 shadow-lg' : 'border-gray-200'
+              ]"
+            >
+              <!-- Doctor Header -->
+              <div class="flex items-center justify-between mb-4 pb-3 border-b border-gray-100">
+                <h3 class="font-bold text-gray-900 flex items-center gap-2">
+                  <Stethoscope class="w-5 h-5 text-blue-600" />
+                  {{ doc.name }}
+                </h3>
+                <div class="flex items-center gap-2">
+                  <span class="px-3 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+                    {{ doc.waitingCount }} menunggu
+                  </span>
+                  <span v-if="doc.hasActiveTicket" class="flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                    <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse mr-1"></span>
+                    Aktif
+                  </span>
+                </div>
               </div>
-              <div v-if="currentTicket.called_at">
-                <p class="text-gray-600">Waktu Panggil</p>
-                <p class="font-semibold">{{ new Date(currentTicket.called_at).toLocaleTimeString('id-ID') }}</p>
+              
+              <!-- Current Ticket Display -->
+              <div v-if="doc.currentTicket" class="mb-4">
+                <div class="text-center py-6 bg-black text-white rounded-xl">
+                  <p class="text-5xl font-bold mb-2">{{ doc.currentTicket.display_number }}</p>
+                  <p :class="['inline-block px-4 py-1 rounded-full text-sm font-medium border', statusColors[doc.currentTicket.status]]">
+                    {{ doc.currentTicket.status === 'SERVING' ? 'Sedang Dilayani' : 'Dipanggil' }}
+                  </p>
+                </div>
+                
+                <!-- Ticket Info -->
+                <div class="grid grid-cols-2 gap-2 mt-3 text-xs text-gray-500">
+                  <div>
+                    <span class="text-gray-400">Ambil:</span>
+                    {{ new Date(doc.currentTicket.issued_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) }}
+                  </div>
+                  <div v-if="doc.currentTicket.called_at">
+                    <span class="text-gray-400">Panggil:</span>
+                    {{ new Date(doc.currentTicket.called_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) }}
+                  </div>
+                </div>
               </div>
+              
+              <!-- Empty State -->
+              <div v-else class="text-center py-8 text-gray-400 border-2 border-dashed border-gray-200 rounded-xl mb-4">
+                <Clock class="w-10 h-10 mx-auto mb-2 text-gray-300" />
+                <p class="text-sm">Tidak ada pasien</p>
+              </div>
+              
+              <!-- Control Buttons Grid -->
+              <div class="grid grid-cols-4 gap-2 mb-3">
+                <button
+                  @click="handleRecallForDoctor(doc)"
+                  :disabled="actionLoading || !doc.currentTicket || doc.currentTicket.status === 'SERVING'"
+                  class="flex flex-col items-center justify-center p-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
+                  title="Recall"
+                >
+                  <RefreshCw class="w-4 h-4" />
+                  <span class="text-xs mt-1">Recall</span>
+                </button>
+                
+                <button
+                  @click="handleSkipForDoctor(doc)"
+                  :disabled="actionLoading || !doc.currentTicket || doc.currentTicket.status === 'SERVING'"
+                  class="flex flex-col items-center justify-center p-2 bg-orange-100 text-orange-700 rounded-lg hover:bg-orange-200 transition disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
+                  title="Skip"
+                >
+                  <SkipForward class="w-4 h-4" />
+                  <span class="text-xs mt-1">Skip</span>
+                </button>
+                
+                <button
+                  @click="handleStartForDoctor(doc)"
+                  :disabled="actionLoading || !doc.currentTicket || doc.currentTicket.status !== 'CALLED'"
+                  class="flex flex-col items-center justify-center p-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
+                  title="Mulai"
+                >
+                  <Play class="w-4 h-4" />
+                  <span class="text-xs mt-1">Mulai</span>
+                </button>
+                
+                <button
+                  @click="handleFinishForDoctor(doc)"
+                  :disabled="actionLoading || !doc.currentTicket || doc.currentTicket.status !== 'SERVING'"
+                  class="flex flex-col items-center justify-center p-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
+                  title="Selesai"
+                >
+                  <CheckCircle class="w-4 h-4" />
+                  <span class="text-xs mt-1">Selesai</span>
+                </button>
+              </div>
+              
+              <!-- Call Next Button -->
+              <button
+                @click="handleCallNext(doc.id)"
+                :disabled="actionLoading || doc.hasActiveTicket || doc.waitingCount === 0"
+                :class="[
+                  'w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl transition font-semibold',
+                  doc.hasActiveTicket || doc.waitingCount === 0
+                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                    : 'bg-black text-white hover:bg-gray-800'
+                ]"
+              >
+                <Phone class="w-5 h-5" />
+                Panggil Berikutnya
+              </button>
             </div>
-            
-            <!-- Service Timer Display -->
-            <div v-if="serviceStartTime && currentTicket.status === 'SERVING'" class="mt-4 p-4 bg-green-50 border border-green-200 rounded-xl text-center">
-              <p class="text-sm text-green-600 mb-1">⏱️ Waktu Layanan</p>
-              <p class="text-3xl font-bold text-green-700 font-mono">{{ formatElapsedTime(elapsedSeconds) }}</p>
-            </div>
-          </div>
-
-          <div v-else class="text-center py-12 text-gray-500 border-2 border-dashed border-gray-300 rounded-2xl">
-            <Clock class="w-16 h-16 mx-auto mb-4 text-gray-300" />
-            <p class="text-lg font-medium">Tidak ada nomor yang sedang dilayani</p>
-            <p class="text-sm mt-2">Klik "Panggil Berikutnya" untuk memulai</p>
           </div>
         </div>
-      </div>
-
-        <!-- Actions Row (Always Visible) -->
-        <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 mt-4">
-          <h3 class="text-sm font-semibold text-gray-500 mb-4 uppercase tracking-wider">Kontrol Antrian</h3>
-          
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <button
-              @click="openRecallModal"
-              :disabled="actionLoading || !currentTicket || currentTicket.status === 'SERVING'"
-              class="flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed"
-            >
-              <RefreshCw class="w-4 h-4" />
-              <span class="text-sm font-medium">Recall</span>
-            </button>
-            
-            <button
-              @click="openSkipModal"
-              :disabled="actionLoading || !currentTicket || currentTicket.status === 'SERVING'"
-              class="flex items-center justify-center gap-2 px-4 py-3 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed"
-            >
-              <SkipForward class="w-4 h-4" />
-              <span class="text-sm font-medium">Skip</span>
-            </button>
-            
-            <button
-              @click="openStartModal"
-              :disabled="actionLoading || !currentTicket || currentTicket.status !== 'CALLED'"
-              class="flex items-center justify-center gap-2 px-4 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700 transition disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed"
-            >
-              <Play class="w-4 h-4" />
-              <span class="text-sm font-medium">Mulai</span>
-            </button>
-            
-            <button
-              @click="openCompleteModal"
-              :disabled="actionLoading || !currentTicket || currentTicket.status !== 'SERVING'"
-              class="flex items-center justify-center gap-2 px-4 py-3 bg-green-600 text-white rounded-xl hover:bg-green-700 transition disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed"
-            >
-              <CheckCircle class="w-4 h-4" />
-              <span class="text-sm font-medium">Selesai</span>
-            </button>
-          </div>
         </div>
-
-        <!-- Call Next Button -->
-        <button
-          @click="handleCallNext"
-          :disabled="actionLoading || currentTicket"
-          class="w-full flex items-center justify-center gap-3 px-6 py-4 bg-black text-white rounded-xl hover:bg-gray-800 transition disabled:bg-gray-300 disabled:cursor-not-allowed text-lg font-semibold"
-        >
-          <Phone class="w-6 h-6" />
-          <span>Panggil Berikutnya</span>
-        </button>
 
         <!-- Waiting Queue -->
         <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
@@ -538,6 +740,9 @@ watch([successMessage, error], () => {
                   </div>
                   <div class="text-xs text-gray-500">
                     {{ new Date(ticket.issued_at).toLocaleTimeString('id-ID') }}
+                    <span v-if="ticket.doctor_id && doctors.find(d => d.id === ticket.doctor_id)" class="ml-2 text-blue-600">
+                      • {{ doctors.find(d => d.id === ticket.doctor_id)?.name }}
+                    </span>
                   </div>
                 </div>
               </div>

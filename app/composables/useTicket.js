@@ -81,8 +81,12 @@ export const useTicket = () => {
 
   /**
    * Create a new ticket
+   * @param {string} name - Patient name
+   * @param {Object} queueType - Queue type object
+   * @param {string} paymentType - Payment type ('BPJS' or 'UMUM')
+   * @param {string|null} doctorId - Optional doctor ID if customer selects specific doctor
    */
-  const createTicket = async (name, queueType, paymentType = 'UMUM') => {
+  const createTicket = async (name, queueType, paymentType = 'UMUM', doctorId = null) => {
     try {
       // Check if user already has a ticket for this queue type
       if (ticketStorage.hasTicketForQueue(queueType.id)) {
@@ -159,6 +163,7 @@ export const useTicket = () => {
           queue_type_id: queueType.id,
           patient_name: name,
           payment_type: paymentType, // 'BPJS' or 'UMUM'
+          doctor_id: doctorId, // NEW: Optional selected doctor
           latitude: locationToSend.latitude,
           longitude: locationToSend.longitude
         }
@@ -307,12 +312,62 @@ export const useTicket = () => {
     }
   }
 
+  /**
+   * Sync ticket statuses from backend to localStorage
+   * Call this before checking hasTicketForQueue to ensure data is up-to-date
+   * @returns {Promise<void>}
+   */
+  const syncTicketStatuses = async () => {
+    try {
+      const tickets = ticketStorage.getTickets()
+      if (!tickets || tickets.length === 0) return
+
+      console.log('🔄 Syncing ticket statuses from backend...')
+
+      for (const ticket of tickets) {
+        const ticketId = ticket.token || ticket.id
+        if (!ticketId) continue
+
+        try {
+          // Check ticket status from backend
+          const response = await $fetch(`/v1/customer/queue/status/${ticketId}`, {
+            baseURL,
+            method: 'GET',
+            headers: { 'Accept': 'application/json' }
+          })
+
+          if (response?.success && response?.data) {
+            const ticketData = response.data.ticket || response.data
+            const backendStatus = ticketData.status
+
+            // Update localStorage if status changed
+            if (backendStatus && backendStatus !== ticket.status) {
+              console.log(`📝 Updating ticket ${ticketId} status: ${ticket.status} → ${backendStatus}`)
+              ticketStorage.updateTicketStatus(ticketId, backendStatus)
+            }
+          }
+        } catch (err) {
+          // If 404 or error, ticket might be done/deleted
+          if (err.status === 404) {
+            console.log(`📝 Ticket ${ticketId} not found, marking as DONE`)
+            ticketStorage.updateTicketStatus(ticketId, 'DONE')
+          }
+        }
+      }
+
+      console.log('✅ Ticket status sync complete')
+    } catch (err) {
+      console.warn('⚠️ Failed to sync ticket statuses:', err.message)
+    }
+  }
+
   return {
     createTicket,
     deleteTicket,
     goToTicket,
     hasTicketForQueue,
     getTicketForQueue,
+    syncTicketStatuses,
     TARGET_LOCATION,
     MAX_DISTANCE_METERS
   }

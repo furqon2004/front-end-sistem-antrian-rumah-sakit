@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
-import { User, X, AlertCircle, MapPin } from 'lucide-vue-next'
+import { User, X, AlertCircle, MapPin, Stethoscope } from 'lucide-vue-next'
 
 const props = defineProps({
   queueType: Object,
@@ -11,6 +11,7 @@ const emit = defineEmits(['close', 'ticketTaken'])
 
 const name = ref('')
 const paymentType = ref('UMUM') // Default to UMUM
+const selectedDoctorId = ref('') // NEW: Selected doctor ID
 const error = ref('')
 const isSubmitting = ref(false)
 
@@ -19,8 +20,18 @@ const geofenceEnabled = ref(false)
 const maxDistance = ref(100)
 const geofenceLoading = ref(true)
 
-const { createTicket, goToTicket, hasTicketForQueue } = useTicket()
+const { createTicket, goToTicket, hasTicketForQueue, syncTicketStatuses } = useTicket()
 const { getGeofenceConfig } = useCustomerSettings()
+
+// NEW: Get available doctors for this queue type (poly)
+const availableDoctors = computed(() => {
+  return props.queueType?.available_doctors || []
+})
+
+// NEW: Check if doctor selection should be shown (2+ doctors)
+const showDoctorSelection = computed(() => {
+  return availableDoctors.value.length > 1
+})
 
 // Fetch geofence settings when modal opens
 const fetchGeofenceSettings = async () => {
@@ -52,6 +63,12 @@ const submitForm = async () => {
     return
   }
 
+  // NEW: Validate doctor selection if multiple doctors available
+  if (showDoctorSelection.value && !selectedDoctorId.value) {
+    error.value = 'Silakan pilih dokter yang diinginkan'
+    return
+  }
+
   // Check for existing ticket
   if (hasExistingTicket.value) {
     error.value = 'Anda sudah memiliki tiket untuk layanan ini'
@@ -63,7 +80,9 @@ const submitForm = async () => {
 
   try {
     // Create ticket via API (will request location permission if geofence enabled)
-    const result = await createTicket(name.value, props.queueType, paymentType.value)
+    // NEW: Pass doctor_id if selected
+    const doctorId = selectedDoctorId.value || (availableDoctors.value.length === 1 ? availableDoctors.value[0].id : null)
+    const result = await createTicket(name.value, props.queueType, paymentType.value, doctorId)
 
     if (result.success) {
       // Emit event to refresh queue data
@@ -74,6 +93,7 @@ const submitForm = async () => {
       
       // Reset form
       name.value = ''
+      selectedDoctorId.value = ''
       emit('close')
     } else {
       error.value = result.error || 'Gagal membuat tiket'
@@ -87,12 +107,19 @@ const submitForm = async () => {
 }
 
 // Reset form when modal closes and fetch settings when opens
-watch(() => props.show, (newVal) => {
+watch(() => props.show, async (newVal) => {
   if (newVal) {
+    // Sync ticket statuses from backend before checking existing tickets
+    await syncTicketStatuses()
     fetchGeofenceSettings()
+    // Auto-select doctor if only one available
+    if (availableDoctors.value.length === 1) {
+      selectedDoctorId.value = availableDoctors.value[0].id
+    }
   } else {
     name.value = ''
     paymentType.value = 'UMUM'
+    selectedDoctorId.value = ''
     error.value = ''
   }
 })
@@ -174,8 +201,42 @@ onMounted(() => {
             />
           </div>
 
+          <!-- Doctor Selection (shows when 2+ doctors available) -->
+          <div v-if="showDoctorSelection" class="mt-4">
+            <label class="block text-sm font-medium mb-2">
+              <span class="flex items-center gap-2">
+                <Stethoscope class="w-4 h-4 text-gray-500" />
+                Pilih Dokter
+              </span>
+            </label>
+            
+            <select
+              v-model="selectedDoctorId"
+              class="w-full px-4 py-3 rounded-lg border focus:ring-2 focus:ring-black focus:outline-none bg-white"
+              :disabled="hasExistingTicket || isSubmitting"
+            >
+              <option value="">-- Pilih Dokter --</option>
+              <option 
+                v-for="doctor in availableDoctors" 
+                :key="doctor.id" 
+                :value="doctor.id"
+                :disabled="doctor.schedule?.remaining_quota === 0"
+              >
+                {{ doctor.name }} 
+                <template v-if="doctor.schedule">
+                  ({{ doctor.schedule.start_time?.substring(0,5) }}-{{ doctor.schedule.end_time?.substring(0,5) }}, 
+                  Sisa: {{ doctor.schedule.remaining_quota ?? doctor.schedule.max_quota }})
+                </template>
+              </option>
+            </select>
+            
+            <p class="text-xs text-gray-500 mt-1">
+              Tersedia {{ availableDoctors.length }} dokter hari ini
+            </p>
+          </div>
+
           <!-- Payment Type Selection -->
-          <div>
+          <div class="mt-4">
             <label class="block text-sm font-medium mb-2">
               Jenis Pembayaran
             </label>

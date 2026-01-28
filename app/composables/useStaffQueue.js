@@ -16,6 +16,7 @@ const ENDPOINTS = {
   TODAY: '/v1/staff/queue/today',
   SKIPPED: '/v1/staff/queue/skipped',
   CALL_NEXT: '/v1/staff/queue/call-next',
+  DOCTORS: '/v1/customer/info/doctors', // Use customer endpoint to get doctors with schedules
   SKIP: (id) => `/v1/staff/queue/${id}/skip`,
   RECALL: (id) => `/v1/staff/queue/${id}/recall`,
   RECALL_SKIPPED: (id) => `/v1/staff/queue/${id}/recall-skipped`,
@@ -147,24 +148,94 @@ export const useStaffQueue = () => {
   }
 
   /**
+   * Get doctors list for staff's assigned poly (today's schedule)
+   * @param {string} polyId - Poly ID to filter doctors
+   * @returns {Promise<{success: boolean, data?: Array, error?: string}>}
+   */
+  const getDoctorsList = async (polyId = null) => {
+    try {
+      console.log('👨‍⚕️ Fetching doctors list...')
+      
+      // Fetch from customer info endpoint (public)
+      const response = await $fetch(ENDPOINTS.DOCTORS, {
+        baseURL,
+        method: 'GET',
+        headers: { 'Accept': 'application/json' }
+      })
+      
+      if (response?.success && response?.data) {
+        let doctors = response.data
+        
+        // Filter by poly if provided
+        if (polyId) {
+          doctors = doctors.filter(d => d.poly_id === polyId)
+        }
+        
+        // Get today's day of week (1=Mon, ..., 7=Sun)
+        const today = new Date().getDay()
+        const dayOfWeek = today === 0 ? 7 : today
+        
+        // Filter doctors who have schedule today and add schedule info
+        const doctorsWithTodaySchedule = doctors
+          .filter(doc => {
+            if (!doc.schedules || !Array.isArray(doc.schedules)) return false
+            return doc.schedules.some(s => s.day_of_week === dayOfWeek)
+          })
+          .map(doc => {
+            const todaySchedule = doc.schedules.find(s => s.day_of_week === dayOfWeek)
+            return {
+              id: doc.id,
+              name: doc.name,
+              specialization: doc.specialization,
+              poly_id: doc.poly_id,
+              poly_name: doc.poly?.name,
+              schedule: todaySchedule ? {
+                start_time: todaySchedule.start_time,
+                end_time: todaySchedule.end_time,
+                max_quota: todaySchedule.max_quota,
+                remaining_quota: todaySchedule.remaining_quota
+              } : null
+            }
+          })
+        
+        console.log(`👨‍⚕️ Found ${doctorsWithTodaySchedule.length} doctors with today's schedule`)
+        return { success: true, data: doctorsWithTodaySchedule }
+      }
+      
+      return { success: false, error: 'Failed to fetch doctors' }
+    } catch (err) {
+      console.error('Get doctors list error:', err)
+      return { success: false, error: err.data?.message || 'Gagal memuat daftar dokter' }
+    }
+  }
+
+  /**
    * Call next ticket in queue
    * Requires queue_type_id from existing tickets
+   * Optionally accepts doctorId to call next for specific doctor
+   * @param {string|null} doctorId - Optional doctor ID to call next for specific doctor
    * @returns {Promise<{success: boolean, data?: Object, message?: string, error?: string}>}
    */
-  const callNext = async () => {
+  const callNext = async (doctorId = null) => {
     try {
       const queueTypeId = await getQueueTypeIdFromQueue()
       
-      console.log('📞 Calling next for queue_type_id:', queueTypeId)
+      console.log('📞 Calling next for queue_type_id:', queueTypeId, 'doctor_id:', doctorId)
 
       if (!queueTypeId) {
         return { success: false, error: 'Tidak ada antrian untuk dipanggil' }
       }
 
+      // Build request body with optional doctor_id
+      const body = { queue_type_id: queueTypeId }
+      if (doctorId) {
+        body.doctor_id = doctorId
+      }
+
       const response = await fetchWithRetry(ENDPOINTS.CALL_NEXT, {
         method: 'POST',
         includeContentType: true,
-        body: { queue_type_id: queueTypeId }
+        body: body
       })
       
       if (response?.success) {
@@ -359,6 +430,7 @@ export const useStaffQueue = () => {
             serving: statsData.serving || 0,
             done: statsData.done || 0,
             avg_waiting_time: Math.round(statsData.avg_waiting_time || 0),
+            poly_id: polyData.id || null, // Staff's assigned poly ID
             poly_name: polyData.name || 'Poli',
             poly_status: polyData.is_active ? 'active' : 'inactive'
           }
@@ -375,6 +447,7 @@ export const useStaffQueue = () => {
   return {
     getQueueList,
     getSkippedQueue,
+    getDoctorsList,
     callNext,
     skipTicket,
     recallTicket,

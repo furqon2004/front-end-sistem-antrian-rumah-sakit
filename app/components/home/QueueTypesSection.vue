@@ -1,6 +1,7 @@
 <script setup>
 import QueueTypeCard from '@/components/queue/QueueTypeCard.vue'
 import { Loader2, AlertCircle } from 'lucide-vue-next'
+import { onMounted, onUnmounted, computed } from 'vue'
 
 const emit = defineEmits(['selectQueue'])
 
@@ -11,6 +12,23 @@ const { queueTypes, loading, error, refresh } = useQueueTypes()
 const activeQueueTypes = computed(() => {
   if (!queueTypes.value) return []
   return queueTypes.value.filter(qt => qt.is_active)
+})
+
+// Auto-refresh when user returns to this tab (visibility change)
+// This ensures admin changes are reflected when customer switches back
+const handleVisibilityChange = () => {
+  if (document.visibilityState === 'visible') {
+    console.log('📋 Page became visible, refreshing queue types...')
+    refresh()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 
 // Expose refresh function for parent component

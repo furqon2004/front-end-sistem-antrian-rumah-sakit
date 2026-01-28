@@ -353,7 +353,8 @@ export const useStaffQueue = () => {
         return { 
           success: true, 
           data: {
-            total_today: statsData.total_today || 0,
+            // Calculate total_today as waiting + serving + done (excluding cancelled)
+            total_today: (statsData.waiting || 0) + (statsData.serving || 0) + (statsData.done || 0),
             waiting: statsData.waiting || 0,
             serving: statsData.serving || 0,
             done: statsData.done || 0,

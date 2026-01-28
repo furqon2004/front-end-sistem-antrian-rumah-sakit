@@ -41,19 +41,44 @@ export const useQueueTypes = () => {
       const today = new Date().getDay()
       const dayOfWeek = today === 0 ? 7 : today
 
-      // Get polys that have doctors with schedules for today
+      // Get polys that have service_hours or doctor schedules for today
       const getPolysWithTodaySchedules = () => {
-        if (!doctors.length) return new Set()
-        
         const polyIds = new Set()
+        
+        console.log('📋 Checking polys for today (day_of_week:', dayOfWeek, ')')
+        
+        // First: Check polys with service_hours for today
+        polys.forEach(poly => {
+          console.log(`  📌 Poly: ${poly.name} (id: ${poly.id})`, {
+            is_active: poly.is_active,
+            service_hours: poly.service_hours
+          })
+          
+          if (poly.is_active && poly.service_hours && Array.isArray(poly.service_hours)) {
+            const todayServiceHour = poly.service_hours.find(sh => sh.day_of_week === dayOfWeek)
+            console.log(`    Today's service_hour:`, todayServiceHour)
+            
+            if (todayServiceHour && todayServiceHour.is_active) {
+              polyIds.add(poly.id)
+              console.log(`    ✅ Added from poly service_hours`)
+            }
+          }
+        })
+        
+        // Fallback: Also add polys that have doctor schedules for today
         doctors.forEach(doc => {
           if (doc.schedules && Array.isArray(doc.schedules)) {
             const hasTodaySchedule = doc.schedules.some(s => s.day_of_week === dayOfWeek)
             if (hasTodaySchedule) {
+              if (!polyIds.has(doc.poly_id)) {
+                console.log(`  ✅ Added poly_id ${doc.poly_id} from doctor ${doc.name} schedule`)
+              }
               polyIds.add(doc.poly_id)
             }
           }
         })
+        
+        console.log('📊 Final poly IDs with today schedule:', [...polyIds])
         return polyIds
       }
       
@@ -127,11 +152,17 @@ export const useQueueTypes = () => {
 
       // Filter queue types to only show polys with doctor schedules today
       // Then merge data into queue types
-      return rawQueueTypes
-        .filter(qt => {
-          // Only show if poly has doctor schedules for today
-          return polysWithSchedulesToday.has(qt.poly_id)
-        })
+      console.log('📋 Raw queue types from API:', rawQueueTypes.map(qt => ({ name: qt.name, poly_id: qt.poly_id, is_active: qt.is_active })))
+      
+      const filteredQueueTypes = rawQueueTypes.filter(qt => {
+        const isIncluded = polysWithSchedulesToday.has(qt.poly_id)
+        console.log(`  🎫 Queue Type: ${qt.name} (poly_id: ${qt.poly_id}) - ${isIncluded ? '✅ INCLUDED' : '❌ EXCLUDED'}`)
+        return isIncluded
+      })
+      
+      console.log('📊 Filtered queue types count:', filteredQueueTypes.length)
+      
+      return filteredQueueTypes
         .map(qt => {
           const polyId = qt.poly_id
           const serviceHour = getPolyServiceHours(polyId)

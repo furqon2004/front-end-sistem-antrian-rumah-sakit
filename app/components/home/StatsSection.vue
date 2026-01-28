@@ -86,8 +86,61 @@ const fetchStats = async () => {
       dashboardData.totalPatientsToday = totalCompletedToday
     }
 
-    // 2. Fetch queue types (for active polys count)
+    // 2. Fetch polys and doctors to count active polys with today's schedule
     let activePolysCount = 0
+    try {
+      // Fetch polys and doctors in parallel
+      const [polysResponse, doctorsResponse] = await Promise.all([
+        fetch(`${baseURL}/v1/customer/info/polys`),
+        fetch(`${baseURL}/v1/customer/info/doctors`)
+      ])
+      
+      const polysResult = polysResponse.ok ? await polysResponse.json() : { data: [] }
+      const doctorsResult = doctorsResponse.ok ? await doctorsResponse.json() : { data: [] }
+      
+      const polysData = polysResult.data || []
+      const doctorsData = doctorsResult.data || []
+      
+      // Get today's day of week (1=Mon, ..., 7=Sun)
+      const today = new Date().getDay()
+      const dayOfWeek = today === 0 ? 7 : today
+      
+      console.log('📊 StatsSection - Checking polys for day_of_week:', dayOfWeek)
+      
+      // Collect poly IDs that should be counted (same logic as useQueueTypes)
+      const activePolyIds = new Set()
+      
+      // First: Check polys with service_hours for today
+      polysData.forEach(poly => {
+        if (poly.is_active && poly.service_hours && Array.isArray(poly.service_hours)) {
+          const hasTodayServiceHours = poly.service_hours.some(
+            sh => sh.day_of_week === dayOfWeek && sh.is_active
+          )
+          if (hasTodayServiceHours) {
+            activePolyIds.add(poly.id)
+            console.log(`  ✅ ${poly.name} - from poly service_hours`)
+          }
+        }
+      })
+      
+      // Fallback: Also add polys that have doctor schedules for today
+      doctorsData.forEach(doc => {
+        if (doc.schedules && Array.isArray(doc.schedules)) {
+          const hasTodaySchedule = doc.schedules.some(s => s.day_of_week === dayOfWeek)
+          if (hasTodaySchedule && !activePolyIds.has(doc.poly_id)) {
+            activePolyIds.add(doc.poly_id)
+            console.log(`  ✅ poly_id ${doc.poly_id} - from doctor ${doc.name} schedule`)
+          }
+        }
+      })
+      
+      activePolysCount = activePolyIds.size
+      console.log('📊 StatsSection - Active polys with today schedule:', activePolysCount)
+    } catch (e) {
+      console.error('Error fetching polys:', e)
+    }
+
+    // 3. Fetch queue types for stats (total patients, avg wait)
     let totalPatients = 0
     let avgWait = 0
     
@@ -97,9 +150,8 @@ const fetchStats = async () => {
         const result = await queueTypesResponse.json()
         const data = result.data || []
         
-        // Count active queue types
+        // Get active queue types
         const activeQueueTypes = data.filter(qt => qt.is_active)
-        activePolysCount = activeQueueTypes.length
         
         // Try to get stats if available in queue types (some backends might provide it)
         totalPatients = data.reduce((sum, qt) => sum + (qt.today_count || qt.total_today || 0), 0)

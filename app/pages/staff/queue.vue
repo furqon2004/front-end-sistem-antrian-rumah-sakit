@@ -43,6 +43,32 @@ const actionLoading = ref(false)
 const error = ref(null)
 const successMessage = ref(null)
 
+// Override map: ticketId -> doctorId (to persist forced assignments through auto-refresh)
+const doctorAssignmentOverrides = ref({})
+
+// Toast alert state
+const toast = ref({
+  show: false,
+  message: '',
+  type: 'success' // 'success', 'error', 'info'
+})
+let toastTimeout = null
+
+// Show toast alert
+const showToast = (message, type = 'success') => {
+  // Clear any existing timeout
+  if (toastTimeout) {
+    clearTimeout(toastTimeout)
+  }
+  
+  toast.value = { show: true, message, type }
+  
+  // Auto-hide after 3 seconds
+  toastTimeout = setTimeout(() => {
+    toast.value.show = false
+  }, 3000)
+}
+
 // Doctor state
 const doctors = ref([]) // List of doctors for this poly
 const selectedDoctorId = ref(null) // Currently selected doctor filter (null = all)
@@ -138,6 +164,11 @@ const showCompleteModal = ref(false)
 const showRecallSkippedModal = ref(false)
 const ticketToRecall = ref(null)
 
+// Per-doctor modal states
+const showPerDoctorModal = ref(false)
+const perDoctorAction = ref(null) // 'recall', 'skip', 'start', 'finish', 'call'
+const perDoctorTarget = ref(null) // The doctor object
+
 // Computed for pagination
 const paginatedWaitingQueue = computed(() => {
   const start = (waitingPage.value - 1) * ITEMS_PER_PAGE
@@ -200,27 +231,43 @@ const fetchQueue = async () => {
       currentByDoctor[doc.id] = null
       waitingByDoctor[doc.id] = []
     })
-    // Also handle tickets without doctor_id (for backwards compatibility)
-    currentByDoctor['unassigned'] = null
-    waitingByDoctor['unassigned'] = []
     
-    // Categorize each ticket
-    console.log('🎫 Processing tickets, checking doctor_id:', data.map(t => ({ id: t.id, display: t.display_number, doctor_id: t.doctor_id, status: t.status })))
+    // Categorize each ticket - NO unassigned category, all go to actual doctors
+    let roundRobinIndex = 0
+    const doctorIds = doctors.value.map(d => d.id)
+    const firstDoctorId = doctorIds[0] || null
+    console.log('🎫 Processing tickets, available doctors:', doctorIds)
+    console.log('🎫 Tickets:', data.map(t => ({ id: t.id, display: t.display_number, doctor_id: t.doctor_id, status: t.status })))
     
     data.forEach(ticket => {
-      const doctorId = ticket.doctor_id || 'unassigned'
+      // Check if there's a forced assignment override for this ticket
+      let doctorId = doctorAssignmentOverrides.value[ticket.id] || ticket.doctor_id
       
+      // For CALLED/SERVING tickets - use override or original doctor_id
+      // If no doctor_id, assign to first available doctor
       if (ticket.status === 'CALLED' || ticket.status === 'SERVING') {
-        // Current ticket for this doctor
-        if (!currentByDoctor[doctorId]) {
-          currentByDoctor[doctorId] = ticket
+        const targetDoctorId = doctorId || firstDoctorId
+        
+        if (targetDoctorId && !currentByDoctor[targetDoctorId]) {
+          currentByDoctor[targetDoctorId] = { ...ticket, doctor_id: targetDoctorId }
+          console.log(`  🎯 CALLED/SERVING ticket ${ticket.display_number} for doctor: ${targetDoctorId}${doctorAssignmentOverrides.value[ticket.id] ? ' (OVERRIDE)' : ''}`)
         }
       } else if (ticket.status === 'WAITING') {
-        // Waiting queue for this doctor
-        if (!waitingByDoctor[doctorId]) {
+        // For WAITING tickets - distribute using round-robin if no doctor_id
+        if (!doctorId && doctorIds.length > 0) {
+          doctorId = doctorIds[roundRobinIndex % doctorIds.length]
+          roundRobinIndex++
+          console.log(`  📌 WAITING ticket ${ticket.display_number} assigned to doctor: ${doctorId} (round-robin)`)
+        } else if (!doctorId && firstDoctorId) {
+          doctorId = firstDoctorId
+        }
+        
+        if (doctorId && !waitingByDoctor[doctorId]) {
           waitingByDoctor[doctorId] = []
         }
-        waitingByDoctor[doctorId].push(ticket)
+        if (doctorId) {
+          waitingByDoctor[doctorId].push(ticket)
+        }
       }
     })
     
@@ -275,8 +322,10 @@ const doctorsWithCounts = computed(() => {
   }))
 })
 
-// Check if multiple doctors are available
-const hasMultipleDoctors = computed(() => doctors.value.length > 1)
+// Check if any doctors are available
+const hasMultipleDoctors = computed(() => {
+  return doctors.value.length >= 1
+})
 
 // Call next ticket (for selected doctor if multiple doctors)
 const handleCallNext = async (doctorId = null) => {
@@ -290,9 +339,12 @@ const handleCallNext = async (doctorId = null) => {
   
   if (result.success) {
     successMessage.value = result.message
-    await fetchQueue()
+    showToast(`✅ ${result.message || 'Berhasil memanggil pasien berikutnya'}`, 'success')
+    // Non-blocking fetch - update UI in background
+    fetchQueue()
   } else {
     error.value = result.error
+    showToast(`❌ ${result.error || 'Gagal memanggil'}`, 'error')
   }
   
   actionLoading.value = false
@@ -314,9 +366,12 @@ const confirmSkip = async () => {
   
   if (result.success) {
     successMessage.value = result.message
-    await fetchQueue()
+    showToast(`⏭️ ${result.message || 'Pasien berhasil dilewati'}`, 'info')
+    // Non-blocking fetch
+    fetchQueue()
   } else {
     error.value = result.error
+    showToast(`❌ ${result.error || 'Gagal melewati'}`, 'error')
   }
   
   actionLoading.value = false
@@ -338,9 +393,12 @@ const confirmRecall = async () => {
   
   if (result.success) {
     successMessage.value = result.message
-    await fetchQueue()
+    showToast(`📢 ${result.message || 'Pasien berhasil dipanggil ulang'}`, 'success')
+    // Non-blocking fetch
+    fetchQueue()
   } else {
     error.value = result.error
+    showToast(`❌ ${result.error || 'Gagal memanggil ulang'}`, 'error')
   }
   
   actionLoading.value = false
@@ -391,11 +449,14 @@ const confirmStartService = async () => {
   
   if (result.success) {
     successMessage.value = result.message
+    showToast(`▶️ ${result.message || 'Layanan dimulai'}`, 'success')
     // Start the timer when service begins
     startTimer()
-    await fetchQueue()
+    // Non-blocking fetch
+    fetchQueue()
   } else {
     error.value = result.error
+    showToast(`❌ ${result.error || 'Gagal memulai layanan'}`, 'error')
   }
   
   actionLoading.value = false
@@ -419,92 +480,202 @@ const confirmComplete = async () => {
   const result = await finishService(currentTicket.value.id)
   
   if (result.success) {
-    successMessage.value = `${result.message} (Durasi layanan: ${formatElapsedTime(elapsedSeconds.value)})`
+    const durationText = `(Durasi: ${formatElapsedTime(elapsedSeconds.value)})`
+    successMessage.value = `${result.message} ${durationText}`
+    showToast(`✅ Layanan selesai ${durationText}`, 'success')
     // Reset timer state
     elapsedSeconds.value = 0
     serviceStartTime.value = null
-    await fetchQueue()
+    // Non-blocking fetch
+    fetchQueue()
   } else {
     error.value = result.error
+    showToast(`❌ ${result.error || 'Gagal menyelesaikan layanan'}`, 'error')
   }
   
   actionLoading.value = false
 }
 
 // ============ Per-Doctor Action Handlers ============
-// These functions handle actions for specific doctor's tickets
+// These functions show confirmation modal before executing actions
 
-const handleRecallForDoctor = async (doc) => {
-  if (!doc.currentTicket) return
+// Open per-doctor confirmation modal
+const openPerDoctorConfirm = (action, doc) => {
+  perDoctorAction.value = action
+  perDoctorTarget.value = doc
+  showPerDoctorModal.value = true
+}
+
+// Get modal message based on action
+const getPerDoctorModalMessage = computed(() => {
+  const doc = perDoctorTarget.value
+  const ticket = doc?.currentTicket?.display_number || doc?.id
+  
+  switch (perDoctorAction.value) {
+    case 'call':
+      return `Panggil pasien berikutnya untuk ${doc?.name || 'dokter ini'}?`
+    case 'recall':
+      return `Panggil ulang nomor ${ticket} untuk ${doc?.name}?`
+    case 'skip':
+      return `Lewati nomor ${ticket} untuk ${doc?.name}? Pasien bisa dipanggil kembali nanti.`
+    case 'start':
+      return `Mulai layanan untuk nomor ${ticket} (${doc?.name})?`
+    case 'finish':
+      return `Selesaikan layanan untuk nomor ${ticket} (${doc?.name})?`
+    default:
+      return 'Apakah Anda yakin?'
+  }
+})
+
+// Get modal title based on action
+const getPerDoctorModalTitle = computed(() => {
+  switch (perDoctorAction.value) {
+    case 'call': return ' Panggil Pasien'
+    case 'recall': return 'Panggil Ulang'
+    case 'finish': return 'Selesaikan Layanan'
+    default: return 'Konfirmasi'
+  }
+})
+
+// Execute per-doctor action after confirmation
+const confirmPerDoctorAction = async () => {
+  showPerDoctorModal.value = false
+  
+  const doc = perDoctorTarget.value
+  if (!doc) return
+  
   actionLoading.value = true
   error.value = null
   successMessage.value = null
   
-  const result = await recallTicket(doc.currentTicket.id)
+  // === OPTIMISTIC UPDATE - Update UI immediately before API returns ===
+  const doctorId = doc.id
   
-  if (result.success) {
-    successMessage.value = `${doc.name}: ${result.message}`
-    await fetchQueue()
-  } else {
-    error.value = result.error
+  // For non-call actions, do optimistic update
+  if (perDoctorAction.value === 'start' && doc.currentTicket) {
+    // Update status to SERVING immediately
+    currentTicketsByDoctor.value[doctorId] = { ...doc.currentTicket, status: 'SERVING' }
+    updateCurrentView()
+  } else if (perDoctorAction.value === 'skip' && doc.currentTicket) {
+    // Remove from current immediately
+    currentTicketsByDoctor.value[doctorId] = null
+    updateCurrentView()
+  } else if (perDoctorAction.value === 'finish' && doc.currentTicket) {
+    // Remove from current immediately
+    currentTicketsByDoctor.value[doctorId] = null
+    updateCurrentView()
+  }
+  // === END OPTIMISTIC UPDATE ===
+  
+  let result = null
+  
+  switch (perDoctorAction.value) {
+    case 'call':
+      result = await callNext(doc.id)
+      if (result.success && result.data) {
+        // Use ticket data from API response and FORCE assign to clicked doctor
+        const calledTicket = result.data.ticket || result.data
+        const ticketWithDoctor = { 
+          ...calledTicket, 
+          status: 'CALLED',
+          doctor_id: doctorId // Force assign to the doctor that was clicked
+        }
+        
+        // IMPORTANT: Save override so auto-refresh respects this assignment
+        doctorAssignmentOverrides.value[calledTicket.id] = doctorId
+        console.log('💾 Saved override: ticket', calledTicket.id, '-> doctor', doctorId)
+        
+        // Update UI with the actual called ticket
+        currentTicketsByDoctor.value[doctorId] = ticketWithDoctor
+        
+        // Remove from waiting queue if present (from ALL doctor queues, since it might be in wrong queue)
+        Object.keys(waitingQueueByDoctor.value).forEach(docId => {
+          waitingQueueByDoctor.value[docId] = (waitingQueueByDoctor.value[docId] || []).filter(t => t.id !== calledTicket.id)
+        })
+        
+        updateCurrentView()
+        console.log('✅ Called ticket', calledTicket.display_number, 'assigned to doctor', doctorId)
+        showToast(`✅ ${doc.name}: ${calledTicket.display_number || result.message || 'Pasien dipanggil'}`, 'success')
+      } else if (result.success) {
+        showToast(`✅ ${doc.name}: ${result.message || 'Pasien dipanggil'}`, 'success')
+        fetchQueue() // Fallback fetch if no data returned
+      }
+      break
+      
+    case 'recall':
+      if (!doc.currentTicket) break
+      result = await recallTicket(doc.currentTicket.id)
+      if (result.success) {
+        showToast(`📢 ${doc.name}: Pasien dipanggil ulang`, 'success')
+      }
+      break
+      
+    case 'skip':
+      if (!doc.currentTicket) break
+      result = await skipTicket(doc.currentTicket.id)
+      if (result.success) {
+        // Remove override since ticket is no longer active
+        delete doctorAssignmentOverrides.value[doc.currentTicket.id]
+        showToast(`⏭️ ${doc.name}: Pasien dilewati`, 'info')
+      }
+      break
+      
+    case 'start':
+      if (!doc.currentTicket) break
+      result = await startService(doc.currentTicket.id)
+      if (result.success) {
+        showToast(`▶️ ${doc.name}: Layanan dimulai`, 'success')
+      }
+      break
+      
+    case 'finish':
+      if (!doc.currentTicket) break
+      result = await finishService(doc.currentTicket.id)
+      if (result.success) {
+        // Remove override since ticket is done
+        delete doctorAssignmentOverrides.value[doc.currentTicket.id]
+        showToast(`✅ ${doc.name}: Layanan selesai`, 'success')
+      }
+      break
   }
   
+  // Handle result for non-call actions
+  if (result && perDoctorAction.value !== 'call') {
+    if (result.success) {
+      successMessage.value = result.message
+      // Background fetch to sync with server (non-blocking)
+      fetchQueue()
+    } else {
+      error.value = result.error
+      showToast(`❌ ${result.error}`, 'error')
+      // Revert optimistic update on error
+      fetchQueue()
+    }
+  } else if (result && !result.success) {
+    error.value = result.error
+    showToast(`❌ ${result.error}`, 'error')
+    fetchQueue()
+  }
+  
+  // Reset
+  perDoctorAction.value = null
+  perDoctorTarget.value = null
   actionLoading.value = false
 }
 
-const handleSkipForDoctor = async (doc) => {
-  if (!doc.currentTicket) return
-  actionLoading.value = true
-  error.value = null
-  successMessage.value = null
-  
-  const result = await skipTicket(doc.currentTicket.id)
-  
-  if (result.success) {
-    successMessage.value = `${doc.name}: ${result.message}`
-    await fetchQueue()
-  } else {
-    error.value = result.error
-  }
-  
-  actionLoading.value = false
+// Cancel per-doctor modal
+const cancelPerDoctorAction = () => {
+  showPerDoctorModal.value = false
+  perDoctorAction.value = null
+  perDoctorTarget.value = null
 }
 
-const handleStartForDoctor = async (doc) => {
-  if (!doc.currentTicket) return
-  actionLoading.value = true
-  error.value = null
-  successMessage.value = null
-  
-  const result = await startService(doc.currentTicket.id)
-  
-  if (result.success) {
-    successMessage.value = `${doc.name}: Layanan dimulai`
-    await fetchQueue()
-  } else {
-    error.value = result.error
-  }
-  
-  actionLoading.value = false
-}
-
-const handleFinishForDoctor = async (doc) => {
-  if (!doc.currentTicket) return
-  actionLoading.value = true
-  error.value = null
-  successMessage.value = null
-  
-  const result = await finishService(doc.currentTicket.id)
-  
-  if (result.success) {
-    successMessage.value = `${doc.name}: Layanan selesai`
-    await fetchQueue()
-  } else {
-    error.value = result.error
-  }
-  
-  actionLoading.value = false
-}
+// Legacy handlers - now open modal first
+const handleRecallForDoctor = (doc) => openPerDoctorConfirm('recall', doc)
+const handleSkipForDoctor = (doc) => openPerDoctorConfirm('skip', doc)
+const handleStartForDoctor = (doc) => openPerDoctorConfirm('start', doc)
+const handleFinishForDoctor = (doc) => openPerDoctorConfirm('finish', doc)
+const handleCallForDoctor = (doc) => openPerDoctorConfirm('call', doc)
 
 // Auto-refresh every 3 seconds
 let refreshInterval = null
@@ -581,6 +752,41 @@ watch([successMessage, error], () => {
         {{ error }}
       </div>
 
+      <!-- Toast Notification -->
+      <Transition
+        enter-active-class="transform ease-out duration-300 transition"
+        enter-from-class="translate-y-2 opacity-0 sm:translate-y-0 sm:translate-x-2"
+        enter-to-class="translate-y-0 opacity-100 sm:translate-x-0"
+        leave-active-class="transition ease-in duration-200"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div 
+          v-if="toast.show" 
+          class="fixed top-4 right-4 z-50 max-w-sm w-full shadow-lg rounded-xl pointer-events-auto"
+          :class="{
+            'bg-green-500 text-white': toast.type === 'success',
+            'bg-red-500 text-white': toast.type === 'error',
+            'bg-blue-500 text-white': toast.type === 'info'
+          }"
+        >
+          <div class="p-4">
+            <div class="flex items-center justify-between">
+              <p class="text-sm font-medium">{{ toast.message }}</p>
+              <button 
+                @click="toast.show = false" 
+                class="ml-4 text-white/80 hover:text-white focus:outline-none"
+              >
+                <span class="sr-only">Tutup</span>
+                <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+
       <!-- Loading State -->
       <div v-if="loading" class="flex items-center justify-center py-12">
         <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-black"></div>
@@ -599,9 +805,9 @@ watch([successMessage, error], () => {
           
           <div :class="[
             'grid gap-4',
-            doctors.length === 2 ? 'grid-cols-1 md:grid-cols-2' : 
-            doctors.length >= 3 ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 
-            'grid-cols-1'
+            doctorsWithCounts.length === 1 ? 'grid-cols-1 md:grid-cols-1' :
+            doctorsWithCounts.length === 2 ? 'grid-cols-1 md:grid-cols-2' : 
+            'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
           ]">
             <div 
               v-for="doc in doctorsWithCounts" 
@@ -701,7 +907,7 @@ watch([successMessage, error], () => {
               
               <!-- Call Next Button -->
               <button
-                @click="handleCallNext(doc.id)"
+                @click="handleCallForDoctor(doc)"
                 :disabled="actionLoading || doc.hasActiveTicket || doc.waitingCount === 0"
                 :class="[
                   'w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl transition font-semibold',
@@ -888,7 +1094,7 @@ watch([successMessage, error], () => {
         @confirm="confirmStartService"
         @cancel="showStartModal = false"
       />
-      <!-- Complete Service Confirmation Modal -->
+    <!-- Complete Service Confirmation Modal -->
     <ConfirmModal
       :show="showCompleteModal"
       title="Selesai Layanan"
@@ -898,6 +1104,18 @@ watch([successMessage, error], () => {
       type="success"
       @confirm="confirmComplete"
       @cancel="showCompleteModal = false"
+    />
+
+    <!-- Per-Doctor Action Confirmation Modal -->
+    <ConfirmModal
+      :show="showPerDoctorModal"
+      :title="getPerDoctorModalTitle"
+      :message="getPerDoctorModalMessage"
+      confirm-text="Ya, Lanjutkan"
+      cancel-text="Batal"
+      :type="perDoctorAction === 'skip' ? 'warning' : perDoctorAction === 'finish' ? 'success' : 'info'"
+      @confirm="confirmPerDoctorAction"
+      @cancel="cancelPerDoctorAction"
     />
   </StaffLayout>
 </template>

@@ -1,6 +1,6 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
-import { User, X, AlertCircle, MapPin, Stethoscope } from 'lucide-vue-next'
+import { ref, watch, onMounted, computed } from 'vue'
+import { User, X, MapPin } from 'lucide-vue-next'
 
 const props = defineProps({
   queueType: Object,
@@ -11,7 +11,6 @@ const emit = defineEmits(['close', 'ticketTaken'])
 
 const name = ref('')
 const paymentType = ref('UMUM') // Default to UMUM
-const selectedDoctorId = ref('') // NEW: Selected doctor ID
 const error = ref('')
 const isSubmitting = ref(false)
 
@@ -20,17 +19,12 @@ const geofenceEnabled = ref(false)
 const maxDistance = ref(100)
 const geofenceLoading = ref(true)
 
-const { createTicket, goToTicket, hasTicketForQueue, syncTicketStatuses } = useTicket()
+const { createTicket, goToTicket } = useTicket()
 const { getGeofenceConfig } = useCustomerSettings()
 
-// NEW: Get available doctors for this queue type (poly)
+// Get available doctors for this queue type (poly) - auto-select first one
 const availableDoctors = computed(() => {
   return props.queueType?.available_doctors || []
-})
-
-// NEW: Check if doctor selection should be shown (2+ doctors)
-const showDoctorSelection = computed(() => {
-  return availableDoctors.value.length > 1
 })
 
 // Fetch geofence settings when modal opens
@@ -47,11 +41,6 @@ const fetchGeofenceSettings = async () => {
   geofenceLoading.value = false
 }
 
-// Check if user already has ticket for this queue type
-const hasExistingTicket = computed(() => {
-  return props.queueType ? hasTicketForQueue(props.queueType.id) : false
-})
-
 const submitForm = async () => {
   if (!name.value.trim()) {
     error.value = 'Nama wajib diisi'
@@ -63,26 +52,17 @@ const submitForm = async () => {
     return
   }
 
-  // NEW: Validate doctor selection if multiple doctors available
-  if (showDoctorSelection.value && !selectedDoctorId.value) {
-    error.value = 'Silakan pilih dokter yang diinginkan'
-    return
-  }
-
-  // Check for existing ticket
-  if (hasExistingTicket.value) {
-    error.value = 'Anda sudah memiliki tiket untuk layanan ini'
-    return
-  }
+  // NO localStorage check - let backend handle all validation
+  // This allows same person to take tickets from different devices/IPs
+  // Backend will decide if ticket is allowed based on status (DONE allows new ticket)
 
   error.value = ''
   isSubmitting.value = true
 
   try {
-    // Create ticket via API (will request location permission if geofence enabled)
-    // NEW: Pass doctor_id if selected
-    const doctorId = selectedDoctorId.value || (availableDoctors.value.length === 1 ? availableDoctors.value[0].id : null)
-    const result = await createTicket(name.value, props.queueType, paymentType.value, doctorId)
+    // Don't send doctor_id from frontend - let backend decide doctor assignment
+    // This allows backend to distribute tickets evenly among available doctors
+    const result = await createTicket(name.value, props.queueType, paymentType.value, null)
 
     if (result.success) {
       // Emit event to refresh queue data
@@ -93,7 +73,6 @@ const submitForm = async () => {
       
       // Reset form
       name.value = ''
-      selectedDoctorId.value = ''
       emit('close')
     } else {
       error.value = result.error || 'Gagal membuat tiket'
@@ -109,17 +88,11 @@ const submitForm = async () => {
 // Reset form when modal closes and fetch settings when opens
 watch(() => props.show, async (newVal) => {
   if (newVal) {
-    // Sync ticket statuses from backend before checking existing tickets
-    await syncTicketStatuses()
+    // Fetch geofence settings
     fetchGeofenceSettings()
-    // Auto-select doctor if only one available
-    if (availableDoctors.value.length === 1) {
-      selectedDoctorId.value = availableDoctors.value[0].id
-    }
   } else {
     name.value = ''
     paymentType.value = 'UMUM'
-    selectedDoctorId.value = ''
     error.value = ''
   }
 })
@@ -163,17 +136,8 @@ onMounted(() => {
         Layanan: <span class="font-semibold">{{ queueType?.name }}</span>
       </p>
 
-      <!-- Existing Ticket Warning -->
-      <div v-if="hasExistingTicket" class="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-3">
-        <AlertCircle class="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
-        <div>
-          <p class="text-sm font-medium text-yellow-800">Anda sudah memiliki tiket</p>
-          <p class="text-xs text-yellow-700 mt-1">Anda sudah mengambil nomor antrian untuk layanan ini. Silakan pilih layanan lain.</p>
-        </div>
-      </div>
-
       <!-- Geofence Location Info (shows when enabled by admin) -->
-      <div v-else-if="geofenceEnabled && !geofenceLoading" class="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-start gap-3">
+      <div v-if="geofenceEnabled && !geofenceLoading" class="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-start gap-3">
         <MapPin class="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
         <div>
           <p class="text-sm font-medium text-blue-800">Validasi Lokasi Aktif</p>
@@ -197,42 +161,8 @@ onMounted(() => {
               type="text"
               placeholder="Masukkan nama lengkap"
               class="w-full pl-10 pr-4 py-3 rounded-lg border focus:ring-2 focus:ring-black focus:outline-none"
-              :disabled="hasExistingTicket || isSubmitting"
+              :disabled="isSubmitting"
             />
-          </div>
-
-          <!-- Doctor Selection (shows when 2+ doctors available) -->
-          <div v-if="showDoctorSelection" class="mt-4">
-            <label class="block text-sm font-medium mb-2">
-              <span class="flex items-center gap-2">
-                <Stethoscope class="w-4 h-4 text-gray-500" />
-                Pilih Dokter
-              </span>
-            </label>
-            
-            <select
-              v-model="selectedDoctorId"
-              class="w-full px-4 py-3 rounded-lg border focus:ring-2 focus:ring-black focus:outline-none bg-white"
-              :disabled="hasExistingTicket || isSubmitting"
-            >
-              <option value="">-- Pilih Dokter --</option>
-              <option 
-                v-for="doctor in availableDoctors" 
-                :key="doctor.id" 
-                :value="doctor.id"
-                :disabled="doctor.schedule?.remaining_quota === 0"
-              >
-                {{ doctor.name }} 
-                <template v-if="doctor.schedule">
-                  ({{ doctor.schedule.start_time?.substring(0,5) }}-{{ doctor.schedule.end_time?.substring(0,5) }}, 
-                  Sisa: {{ doctor.schedule.remaining_quota ?? doctor.schedule.max_quota }})
-                </template>
-              </option>
-            </select>
-            
-            <p class="text-xs text-gray-500 mt-1">
-              Tersedia {{ availableDoctors.length }} dokter hari ini
-            </p>
           </div>
 
           <!-- Payment Type Selection -->
@@ -248,7 +178,7 @@ onMounted(() => {
                   v-model="paymentType" 
                   value="BPJS" 
                   class="w-4 h-4 text-black focus:ring-black"
-                  :disabled="hasExistingTicket || isSubmitting"
+                  :disabled="isSubmitting"
                 />
                 <span class="text-sm">BPJS</span>
               </label>
@@ -259,7 +189,7 @@ onMounted(() => {
                   v-model="paymentType" 
                   value="UMUM" 
                   class="w-4 h-4 text-black focus:ring-black"
-                  :disabled="hasExistingTicket || isSubmitting"
+                  :disabled="isSubmitting"
                 />
                 <span class="text-sm">Umum</span>
               </label>
@@ -275,7 +205,7 @@ onMounted(() => {
           type="submit"
           class="w-full bg-black text-white py-3 rounded-xl font-medium
                  hover:bg-gray-800 transition active:scale-95 disabled:bg-gray-300 disabled:cursor-not-allowed"
-          :disabled="hasExistingTicket || isSubmitting"
+          :disabled="isSubmitting"
         >
           {{ isSubmitting ? 'Memproses...' : 'Ambil Nomor Antrian' }}
         </button>

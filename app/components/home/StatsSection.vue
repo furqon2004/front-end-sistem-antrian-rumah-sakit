@@ -19,29 +19,15 @@ const fetchStats = async () => {
   try {
     const { baseURL } = useApi()
     
-    // 1. Fetch total completed patients from dedicated endpoint
     let totalCompletedToday = 0
-    try {
-      const completedResponse = await fetch(`${baseURL}/v1/customer/info/total-completed`)
-      if (completedResponse.ok) {
-        const result = await completedResponse.json()
-        if (result.success && result.data) {
-          totalCompletedToday = result.data.total_completed || 0
-          console.log('📊 Got total completed from API:', totalCompletedToday)
-        }
-      }
-    } catch (e) {
-      console.log('Total completed endpoint not accessible:', e.message)
-    }
+    let waitingCount = 0
     
-    // 2. Try to fetch from staff/admin dashboard if token exists
-    // This gives us additional stats like avg wait time
-    let dashboardData = null
+    // Try staff dashboard first - this has the done/completed counts
+    // Uses ALL polys data, not just staff's assigned poly
     const staffToken = localStorage.getItem('staff_token')
     
     if (staffToken) {
       try {
-        // Try staff dashboard first
         const staffResponse = await fetch(`${baseURL}/v1/staff/dashboard`, {
           headers: {
             'Authorization': `Bearer ${staffToken}`,
@@ -52,22 +38,11 @@ const fetchStats = async () => {
         if (staffResponse.ok) {
           const result = await staffResponse.json()
           if (result.success && result.data) {
-            // Parse staff dashboard data
-            // Structure: { staff: {...}, dashboard: [{ total_today, waiting, done, ... }] }
             const dashboardItems = result.data.dashboard || []
-            if (dashboardItems.length > 0) {
-              // Sum up stats from all polys
-              const totalToday = dashboardItems.reduce((sum, item) => sum + (item.total_today || 0), 0)
-              const totalDone = dashboardItems.reduce((sum, item) => sum + (item.done || 0), 0)
-              const totalWaiting = dashboardItems.reduce((sum, item) => sum + (item.waiting || 0), 0)
-              
-              dashboardData = {
-                totalPatientsToday: totalToday,
-                completedToday: totalDone,
-                waitingCount: totalWaiting
-              }
-              console.log('📊 Got stats from staff dashboard:', dashboardData)
-            }
+            // Sum up DONE count from ALL polys for total completed today
+            totalCompletedToday = dashboardItems.reduce((sum, item) => sum + (item.done || 0), 0)
+            waitingCount = dashboardItems.reduce((sum, item) => sum + (item.waiting || 0), 0)
+            console.log('📊 Got stats from staff dashboard (all polys):', { totalCompletedToday, waitingCount })
           }
         }
       } catch (e) {
@@ -75,131 +50,176 @@ const fetchStats = async () => {
       }
     }
     
-    // Use total completed from dedicated endpoint as priority
-    if (totalCompletedToday > 0) {
-      if (!dashboardData) dashboardData = {}
-      dashboardData.totalPatientsToday = totalCompletedToday
+    // Fallback to dedicated endpoint if available
+    if (totalCompletedToday === 0) {
+      try {
+        const completedResponse = await fetch(`${baseURL}/v1/customer/info/total-completed`)
+        if (completedResponse.ok) {
+          const result = await completedResponse.json()
+          if (result.success && result.data) {
+            totalCompletedToday = result.data.total_completed || 0
+            console.log('📊 Got total completed from dedicated API:', totalCompletedToday)
+          }
+        }
+      } catch (e) {
+        console.log('Total completed endpoint not accessible:', e.message)
+      }
     }
 
-    // 2. Fetch polys and doctors to count active polys with today's schedule
-    let activePolysCount = 0
-    try {
-      // Fetch polys and doctors in parallel
-      const [polysResponse, doctorsResponse] = await Promise.all([
-        fetch(`${baseURL}/v1/customer/info/polys`),
-        fetch(`${baseURL}/v1/customer/info/doctors`)
-      ])
-      
-      const polysResult = polysResponse.ok ? await polysResponse.json() : { data: [] }
-      const doctorsResult = doctorsResponse.ok ? await doctorsResponse.json() : { data: [] }
-      
-      const polysData = polysResult.data || []
-      const doctorsData = doctorsResult.data || []
-      
-      // Get today's day of week (1=Mon, ..., 7=Sun)
-      const today = new Date().getDay()
-      const dayOfWeek = today === 0 ? 7 : today
-      
-      console.log('📊 StatsSection - Checking polys for day_of_week:', dayOfWeek)
-      
-      // Collect poly IDs that should be counted (same logic as useQueueTypes)
-      const activePolyIds = new Set()
-      
-      // First: Check polys with service_hours for today
-      polysData.forEach(poly => {
-        if (poly.is_active && poly.service_hours && Array.isArray(poly.service_hours)) {
-          const hasTodayServiceHours = poly.service_hours.some(
-            sh => sh.day_of_week === dayOfWeek && sh.is_active
-          )
-          if (hasTodayServiceHours) {
-            activePolyIds.add(poly.id)
-            console.log(`  ✅ ${poly.name} - from poly service_hours`)
-          }
-        }
-      })
-      
-      // Fallback: Also add polys that have doctor schedules for today
-      doctorsData.forEach(doc => {
-        if (doc.schedules && Array.isArray(doc.schedules)) {
-          const hasTodaySchedule = doc.schedules.some(s => s.day_of_week === dayOfWeek)
-          if (hasTodaySchedule && !activePolyIds.has(doc.poly_id)) {
-            activePolyIds.add(doc.poly_id)
-            console.log(`  ✅ poly_id ${doc.poly_id} - from doctor ${doc.name} schedule`)
-          }
-        }
-      })
-      
-      activePolysCount = activePolyIds.size
-      console.log('📊 StatsSection - Active polys with today schedule:', activePolysCount)
-    } catch (e) {
-      console.error('Error fetching polys:', e)
+    // Store for later use
+    const publicStats = {
+      completedToday: totalCompletedToday,
+      waitingCount: waitingCount
     }
+
+    // 2. Logic merged into step 3 below for efficiency and correctness
+    // (Active Polys calculation moved to use the new doctor data fetch)
 
     // 3. Fetch queue types for stats (total patients, avg wait)
-    let totalPatients = 0
-    let avgWait = 0
+    // 3. Main Public Logic: Fetch doctors to calculate active stats and fallbacks
+    // We derive Active Doctors, Active Polys, and Waiting Queue from here
+    let activeDoctorsCount = 0
+    let activePolysCount = 0
     
     try {
-      const queueTypesResponse = await fetch(`${baseURL}/v1/customer/info/queue-types`)
-      if (queueTypesResponse.ok) {
-        const result = await queueTypesResponse.json()
-        const data = result.data || []
-        
-        // Get active queue types
-        const activeQueueTypes = data.filter(qt => qt.is_active)
-        
-        // Try to get stats if available in queue types (some backends might provide it)
-        totalPatients = data.reduce((sum, qt) => sum + (qt.today_count || qt.total_today || 0), 0)
-        
-        const polysWithData = activeQueueTypes.filter(qt => (qt.today_count || qt.total_today || 0) > 0)
-        if (polysWithData.length > 0) {
-           const totalWeightedTime = polysWithData.reduce((sum, qt) => {
-            const waitTime = qt.avg_waiting_time || qt.avg_service_minutes || 0
-            const count = qt.today_count || qt.total_today || 1
-            return sum + (waitTime * count)
-          }, 0)
-          const totalCount = polysWithData.reduce((sum, qt) => sum + (qt.today_count || qt.total_today || 0), 0)
-          avgWait = totalCount > 0 ? Math.round(totalWeightedTime / totalCount) : 0
-        } else {
-           // Fallback to average of service minutes
-           avgWait = activeQueueTypes.length > 0 
-           ? Math.round(activeQueueTypes.reduce((sum, qt) => sum + (qt.avg_service_minutes || 0), 0) / activeQueueTypes.length)
-           : 0
-        }
-      }
-    } catch (e) {
-      console.error('Error fetching queue types:', e)
-    }
-
-    // 3. Fetch doctors to calculate "Doctors on Duty" (Active Doctors)
-    let activeDoctorsCount = 0
-    try {
-      const doctorsResponse = await fetch(`${baseURL}/v1/customer/info/doctors`)
-      if (doctorsResponse.ok) {
-        const result = await doctorsResponse.json()
-        const doctorsData = result.data || []
+      const doctorsResult = await $fetch(`${baseURL}/v1/customer/info/doctors`).catch(() => null)
+      
+      if (doctorsResult?.data) {
+        const doctorsData = doctorsResult.data
         
         // Get today's day of week (1=Mon, ..., 7=Sun)
         const today = new Date().getDay()
         const dayOfWeek = today === 0 ? 7 : today
         
-        // Filter doctors who have a schedule for today
+        // A. Calculate Active Doctors
         activeDoctorsCount = doctorsData.filter(doc => {
           if (!doc.schedules || !Array.isArray(doc.schedules)) return false
-          // Check if any schedule matches today
-          return doc.schedules.some(sch => sch.day_of_week === dayOfWeek && (!sch.is_active || sch.is_active === true)) // Assume active if field missing or true
+          return doc.schedules.some(sch => sch.day_of_week === dayOfWeek && (!sch.is_active || sch.is_active === true))
         }).length
+        
+        // B. Calculate Active Polys (Set of IDs)
+        const activePolyIds = new Set()
+        const activePolyDoctors = [] // Keep track of doctors in active polys for quota calc
+        
+        doctorsData.forEach(doc => {
+           if (doc.schedules && Array.isArray(doc.schedules)) {
+             const schedule = doc.schedules.find(s => s.day_of_week === dayOfWeek)
+             if (schedule) {
+               activePolyIds.add(doc.poly_id)
+               activePolyDoctors.push({ doc, schedule })
+             }
+           }
+        })
+        
+        activePolysCount = activePolyIds.size
+        
+        // C. Brute Force Waiting Count & Derived Done Count
+        let totalBooked = 0
+        
+        // C1. Calculate Total Registered (Booked) from Quotas first
+        activePolyDoctors.forEach(({ schedule }) => {
+           const max = schedule.max_quota || 0
+           const remaining = schedule.remaining_quota !== undefined ? schedule.remaining_quota : max
+           totalBooked += Math.max(0, max - remaining)
+        })
+        console.log('📊 Total Booked (Registered) based on quota:', totalBooked)
+
+        if (activePolyIds.size > 0) {
+           console.log(`🔄 Fetching active tickets for ${activePolyIds.size} polys...`)
+           
+           // Strategy 1: List Endpoint
+           let foundDataViaList = false
+           try {
+             const listResponse = await $fetch(`${baseURL}/v1/customer/queue-types`).catch(() => null)
+             if (listResponse?.data && Array.isArray(listResponse.data)) {
+                // ... (existing logic) ...
+                const listStats = listResponse.data.reduce((acc, curr) => {
+                   // Only count if this queue type belongs to an active poly
+                   // (Optional match: if (activePolyIds.has(curr.poly_id)) ...)
+                   const wait = curr.waiting_count || curr.current_queue_count || 
+                                (curr.active_queue ? curr.active_queue.filter(t => ['WAITING', 'CALLED', 'SERVING'].includes(t.status)).length : 0)
+                   return acc + wait
+                }, 0)
+                
+                if (listStats > 0) {
+                   waitingCount = listStats
+                   if (totalBooked >= waitingCount) {
+                      totalCompletedToday = totalBooked - waitingCount
+                   }
+                   foundDataViaList = true
+                   console.log('✅ Found stats via List Endpoint:', waitingCount)
+                }
+             }
+           } catch (e) { console.log('List endpoint failed', e) }
+
+           // Strategy 2: Brute Force Detailed Fetch
+           if (!foundDataViaList) {
+             try {
+               // CRITICAL FIX: Map active PolyIDs to QueueTypeIDs first!
+               // We need QueueTypeID to fetch detailed /v1/customer/queue-types/:id
+               const queueInfos = await $fetch(`${baseURL}/v1/customer/info/queue-types`).catch(() => ({ data: [] }))
+               const allQueueTypes = queueInfos?.data || []
+               
+               // Find queue types that match our active poly IDs
+               const targetQueueTypeIds = allQueueTypes
+                 .filter(qt => activePolyIds.has(qt.poly_id))
+                 .map(qt => qt.id) // Use QueueType ID, not Poly ID
+               
+               if (targetQueueTypeIds.length > 0) {
+                   console.log('🔄 Fetching details for Queue IDs:', targetQueueTypeIds)
+                   const detailPromises = targetQueueTypeIds.map(qtId => 
+                      $fetch(`${baseURL}/v1/customer/queue-types/${qtId}`).catch(() => null)
+                   )
+                   
+                   const details = await Promise.all(detailPromises)
+                   let exactWaiting = 0
+                   let hasRealData = false
+                   
+                   details.forEach(detail => {
+                     if (detail?.success && detail?.data) {
+                       const activeQ = detail.data.active_queue || detail.data.queues || []
+                       const count = activeQ.filter(t => ['WAITING', 'CALLED', 'SERVING'].includes(t.status)).length
+                       exactWaiting += count
+                       hasRealData = true
+                       console.log(`  🏥 Queue active tickets: ${count}`)
+                     }
+                   })
+                   
+                   if (hasRealData) {
+                      waitingCount = exactWaiting
+                   }
+               }
+            } catch (err) {
+              console.error('Brute force stats failed:', err)
+           }
+        }
+        
+        // Final derivation: If we have booked count, derive completed from waiting
+        // This runs if we didn't get a direct "completed" count from staff dashboard or dedicated API
+        if (totalCompletedToday === 0 && totalBooked > 0) {
+           // Ensure waitingCount is valid (it defaults to 0 if no queues found, which is correct -> all completed)
+           if (waitingCount <= totalBooked) {
+              totalCompletedToday = totalBooked - waitingCount
+           } else {
+              // Should not happen, but if waiting > booked, then completed = 0?
+              // Or maybe booked is inconsistent. Keep 0 or clamp?
+              totalCompletedToday = 0
+           }
+           console.log(`📊 Derived Completed: ${totalCompletedToday} (Booked: ${totalBooked} - Waiting: ${waitingCount})`)
+        }
       }
+    }
     } catch (e) {
       console.error('Error fetching doctors:', e)
     }
     
-    // Combine data - only show completed (DONE) patients
+    // Combine data - use only public API data for consistency across all platforms
+    // Combine data - use only public API data for consistency across all platforms
     stats.value = {
-      completedPatientsToday: dashboardData?.completedToday || dashboardData?.totalPatientsToday || 0,
-      waitingQueueCount: dashboardData?.waitingCount || dashboardData?.waiting || 0,
-      activeDoctors: dashboardData?.activeDoctors || activeDoctorsCount,
-      activePolys: dashboardData?.activePolys || activePolysCount
+      completedPatientsToday: totalCompletedToday,
+      waitingQueueCount: waitingCount, // Uses correct local var updated by brute force
+      activeDoctors: activeDoctorsCount,
+      activePolys: activePolysCount
     }
     
   } catch (error) {

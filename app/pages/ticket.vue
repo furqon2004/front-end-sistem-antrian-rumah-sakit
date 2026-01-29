@@ -110,6 +110,9 @@ const fetchTicketStatuses = async () => {
         queues_ahead: queueCheck?.remaining_queues,
         estimated_wait_minutes: queueCheck?.estimated_waiting_minutes,
         current_queue: queueCheck?.current_queue,
+        // Add doctor info for per-doctor queue display
+        doctor_name: queueCheck?.doctor_name || ticket.doctor_name,
+        is_per_doctor: queueCheck?.is_per_doctor || false,
         statusError: null
       }
     } catch (error) {
@@ -378,6 +381,12 @@ const getStatusColor = (status) => {
 
             <!-- Real-time Status Info -->
             <div v-if="!ticket.statusError && ticket.status !== 'unknown'" class="bg-blue-50 border-b divide-y divide-blue-100">
+              <!-- Doctor Info (if assigned) -->
+              <div v-if="ticket.doctor_name" class="p-4 bg-indigo-50 border-b border-indigo-100">
+                <p class="text-xs text-gray-600 mb-1">Dokter yang Menangani</p>
+                <p class="text-sm font-bold text-indigo-700">{{ ticket.doctor_name }}</p>
+              </div>
+              
               <!-- Grid Stats -->
               <div class="p-6 grid grid-cols-3 gap-4 text-center">
                 <div v-if="ticket.current_queue || ticket.current_number">
@@ -387,7 +396,9 @@ const getStatusColor = (status) => {
                   </p>
                 </div>
                 <div>
-                  <p class="text-xs text-gray-600 mb-1">Antrian di Depan</p>
+                  <p class="text-xs text-gray-600 mb-1">
+                    {{ ticket.doctor_name ? 'Antrian Dokter Ini' : 'Antrian di Depan' }}
+                  </p>
                   <p class="text-lg font-bold text-blue-600">
                     {{ ticket.queues_ahead ?? 0 }}
                   </p>

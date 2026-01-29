@@ -88,9 +88,22 @@ export const useTicket = () => {
    */
   const createTicket = async (name, queueType, paymentType = 'UMUM', doctorId = null) => {
     try {
-      // Check if user already has a ticket for this queue type
-      if (ticketStorage.hasTicketForQueue(queueType.id)) {
-        throw new Error('Anda sudah memiliki tiket untuk layanan ini')
+      // Sync latest statuses first to ensure we don't block false positives
+      await syncTicketStatuses()
+      
+      // Check if user already has an active ticket
+      if (hasActiveTicket()) {
+        const activeTicket = getActiveTicket()
+        const statusMap = {
+          'WAITING': 'menunggu antrian',
+          'CALLED': 'sedang dipanggil',
+          'SERVING': 'sedang dilayani'
+        }
+        const statusText = statusMap[activeTicket?.status] || 'aktif'
+        return {
+          success: false,
+          error: `Anda masih memiliki antrian yang ${statusText} (${activeTicket?.display_number || ''}). Mohon selesaikan antrian tersebut sebelum mengambil nomor baru.`
+        }
       }
 
       // Get geofence configuration from admin settings
@@ -269,6 +282,32 @@ export const useTicket = () => {
   }
 
   /**
+   * Check if user has ANY active ticket (not DONE, not CANCELLED, not SKIPPED)
+   * This enforces one ticket per user (IP) restriction
+   * @returns {boolean}
+   */
+  const hasActiveTicket = () => {
+    const tickets = ticketStorage.getTickets()
+    if (!tickets || tickets.length === 0) return false
+    
+    // Check if any ticket is still active
+    const activeStatuses = ['WAITING', 'CALLED', 'SERVING']
+    return tickets.some(ticket => activeStatuses.includes(ticket.status))
+  }
+
+  /**
+   * Get the active ticket for this user (if any)
+   * @returns {Object|null}
+   */
+  const getActiveTicket = () => {
+    const tickets = ticketStorage.getTickets()
+    if (!tickets || tickets.length === 0) return null
+    
+    const activeStatuses = ['WAITING', 'CALLED', 'SERVING']
+    return tickets.find(ticket => activeStatuses.includes(ticket.status)) || null
+  }
+
+  /**
    * Check if user has ticket for queue type
    */
   const hasTicketForQueue = (queueTypeId) => {
@@ -367,6 +406,8 @@ export const useTicket = () => {
     goToTicket,
     hasTicketForQueue,
     getTicketForQueue,
+    hasActiveTicket,
+    getActiveTicket,
     syncTicketStatuses,
     TARGET_LOCATION,
     MAX_DISTANCE_METERS

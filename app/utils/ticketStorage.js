@@ -93,27 +93,34 @@ export const ticketStorage = {
   },
 
   /**
-   * Update ticket status by ID
-   * @param {string} ticketId - The ticket ID
+   * Update ticket status by ID or token
+   * @param {string} ticketIdOrToken - The ticket ID or token
    * @param {string} newStatus - The new status (WAITING, CALLED, SERVING, DONE, SKIPPED)
    */
-  updateTicketStatus(ticketId, newStatus) {
+  updateTicketStatus(ticketIdOrToken, newStatus) {
     const tickets = this.getTickets()
+    let found = false
     const updatedTickets = tickets.map(ticket => {
-      if (ticket.id === ticketId) {
+      // Match by id OR token
+      if (ticket.id === ticketIdOrToken || ticket.token === ticketIdOrToken) {
+        found = true
+        console.log(`🔄 Updating ticket ${ticket.display_number || ticketIdOrToken}: ${ticket.status} → ${newStatus}`)
         return { ...ticket, status: newStatus }
       }
       return ticket
     })
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedTickets))
+    
+    if (found) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedTickets))
+    }
   },
 
   /**
-   * Remove a ticket by ID
+   * Remove a ticket by ID or token
    */
-  removeTicket(ticketId) {
+  removeTicket(ticketIdOrToken) {
     const tickets = this.getTickets()
-    const filtered = tickets.filter(ticket => ticket.id !== ticketId)
+    const filtered = tickets.filter(ticket => ticket.id !== ticketIdOrToken && ticket.token !== ticketIdOrToken)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered))
   },
 

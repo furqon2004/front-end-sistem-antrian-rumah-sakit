@@ -142,14 +142,96 @@ export const useQueueStatusCheck = () => {
           console.log('📊 Fallback queue_number - 1:', calculatedRemaining)
         }
         
+        // Calculate per-doctor queue if doctor_id is present
+        // This is when backend doesn't provide queues_ahead_doctor
+        let perDoctorQueuesAhead = null
+        const ticketDoctorId = ticketData.doctor_id
+        
+        if (ticketDoctorId) {
+          // Check if API provides waiting_list with doctor_id info
+          const waitingList = directResponse.data.waiting_list || directResponse.data.waiting_tickets || []
+          
+          if (waitingList.length > 0) {
+            // Count tickets BEFORE this one (lower queue_number) with SAME doctor_id
+            perDoctorQueuesAhead = waitingList.filter(t => 
+              t.doctor_id === ticketDoctorId && 
+              t.queue_number < userQueueNumber &&
+              t.status === 'WAITING'
+            ).length
+            console.log('📊 Calculated per-doctor queues ahead from waiting_list:', perDoctorQueuesAhead)
+          } else {
+            // No waiting_list, estimate based on round-robin distribution
+            // If there are N doctors and total waiting is W, each doctor has ~W/N tickets
+            const totalDoctors = directResponse.data.total_doctors || 2 // Assume 2 if not provided
+            if (calculatedRemaining > 0) {
+              perDoctorQueuesAhead = Math.floor(calculatedRemaining / totalDoctors)
+              console.log('📊 Estimated per-doctor queues ahead (round-robin):', perDoctorQueuesAhead, 'of', calculatedRemaining)
+            } else {
+              perDoctorQueuesAhead = 0
+            }
+          }
+        }
+        
+        // Determine final remaining value - prioritize per-doctor if available
+        const finalRemaining = directResponse.data.queues_ahead_doctor ?? perDoctorQueuesAhead ?? calculatedRemaining
+        
+        // Recalculate estimated waiting time based on NEW remaining count
+        // User request: "jika antriannya 0 maka estimasinya juga akan 0"
+        let newEstimatedMinutes = 0
+        
+        if (finalRemaining > 0) {
+          // If we have AI prediction, try to use its average per patient, otherwise default to 10 mins
+          const originalEstimate = directResponse.data.ai_prediction?.estimated_minutes || directResponse.data.estimated_waiting_minutes || 0
+          const originalQueueLength = directResponse.data.queue_load || (calculatedRemaining > 0 ? calculatedRemaining : 1)
+          
+          let avgPerPatient = 10 // Default 10 mins
+          if (originalEstimate > 0 && originalQueueLength > 0) {
+            avgPerPatient = originalEstimate / originalQueueLength
+          }
+          // Cap average time to reasonable bounds (5-15 mins) if calculated value is weird
+          avgPerPatient = Math.max(5, Math.min(15, avgPerPatient))
+          
+          newEstimatedMinutes = Math.round(finalRemaining * avgPerPatient)
+        }
+        
+        // Construct new AI message to match the per-doctor queue reality
+        let newMessage = ""
+        if (finalRemaining === 0) {
+            newMessage = `Giliran Anda segera tiba! Mohon bersiap masuk ke ruangan ${ticketData.doctor?.name ? 'dr. ' + ticketData.doctor.name : 'dokter'}.`
+        } else if (finalRemaining <= 3) {
+            newMessage = `Antrian cukup lancar dengan ${finalRemaining} pasien di depan Anda. Estimasi waktu tunggu sekitar ${newEstimatedMinutes} menit.`
+        } else if (finalRemaining <= 10) {
+            newMessage = `Antrian sedang berjalan dengan ${finalRemaining} pasien di depan Anda. Estimasi waktu tunggu sekitar ${newEstimatedMinutes} menit. Harap bersabar.`
+        } else {
+            newMessage = `Antrian cukup padat dengan ${finalRemaining} pasien di depan Anda. Estimasi waktu tunggu sekitar ${newEstimatedMinutes} menit. Terima kasih atas kesabaran Anda.`
+        }
+
+        // Update AI prediction object if exists
+        const updatedAiPrediction = directResponse.data.ai_prediction ? {
+          ...directResponse.data.ai_prediction,
+          estimated_minutes: newEstimatedMinutes,
+          message: newMessage, // Override message completely
+          factors: {
+             ...directResponse.data.ai_prediction.factors,
+             queue_load: finalRemaining // Update queue load factor too
+          }
+        } : null
+        
         // Return full data including AI prediction with CORRECTED remaining_queues
+        // Include doctor info for per-doctor queue display
         return { 
           exists: true, 
           status: status,
-          ai_prediction: directResponse.data.ai_prediction,
-          remaining_queues: calculatedRemaining, // Use our calculated value
-          estimated_waiting_minutes: directResponse.data.estimated_waiting_minutes,
-          current_queue: directResponse.data.current_queue
+          ai_prediction: updatedAiPrediction,
+          // Use per-doctor remaining if available
+          remaining_queues: finalRemaining,
+          estimated_waiting_minutes: newEstimatedMinutes,
+          current_queue: directResponse.data.current_queue,
+          // Include doctor info for display
+          doctor_id: ticketData.doctor_id,
+          doctor_name: ticketData.doctor?.name || directResponse.data.doctor?.name,
+          // Flag to indicate if this is per-doctor count
+          is_per_doctor: ticketDoctorId !== null && ticketDoctorId !== undefined
         }
       }
     } catch (directError) {

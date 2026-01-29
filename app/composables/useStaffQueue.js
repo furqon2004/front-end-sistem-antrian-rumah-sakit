@@ -429,7 +429,12 @@ export const useStaffQueue = () => {
             waiting: statsData.waiting || 0,
             serving: statsData.serving || 0,
             done: statsData.done || 0,
-            avg_waiting_time: Math.round(statsData.avg_waiting_time || 0),
+            // Use dashboard avg_waiting_time, fallback to poly avg_service_minutes, or calculate estimate
+            avg_waiting_time: Math.round(
+              statsData.avg_waiting_time || 
+              polyData.avg_service_minutes || 
+              (statsData.done > 0 ? 5 : 0) // Fallback: if patients done but no stats, assume 5 mins
+            ),
             poly_id: polyData.id || null, // Staff's assigned poly ID
             poly_name: polyData.name || 'Poli',
             poly_status: polyData.is_active ? 'active' : 'inactive'

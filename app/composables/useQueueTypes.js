@@ -41,44 +41,26 @@ export const useQueueTypes = () => {
       const today = new Date().getDay()
       const dayOfWeek = today === 0 ? 7 : today
 
-      // Get polys that have service_hours or doctor schedules for today
+      // Get polys that have doctor schedules for today
+      // IMPORTANT: Poli only active if there is a doctor scheduled for today
       const getPolysWithTodaySchedules = () => {
         const polyIds = new Set()
         
         console.log('📋 Checking polys for today (day_of_week:', dayOfWeek, ')')
+        console.log('📋 Only polys with doctor schedules will be included')
         
-        // First: Check polys with service_hours for today
-        polys.forEach(poly => {
-          console.log(`  📌 Poly: ${poly.name} (id: ${poly.id})`, {
-            is_active: poly.is_active,
-            service_hours: poly.service_hours
-          })
-          
-          if (poly.is_active && poly.service_hours && Array.isArray(poly.service_hours)) {
-            const todayServiceHour = poly.service_hours.find(sh => sh.day_of_week === dayOfWeek)
-            console.log(`    Today's service_hour:`, todayServiceHour)
-            
-            if (todayServiceHour && todayServiceHour.is_active) {
-              polyIds.add(poly.id)
-              console.log(`    ✅ Added from poly service_hours`)
-            }
-          }
-        })
-        
-        // Fallback: Also add polys that have doctor schedules for today
+        // ONLY include polys that have doctor schedules for today
         doctors.forEach(doc => {
           if (doc.schedules && Array.isArray(doc.schedules)) {
             const hasTodaySchedule = doc.schedules.some(s => s.day_of_week === dayOfWeek)
             if (hasTodaySchedule) {
-              if (!polyIds.has(doc.poly_id)) {
-                console.log(`  ✅ Added poly_id ${doc.poly_id} from doctor ${doc.name} schedule`)
-              }
               polyIds.add(doc.poly_id)
+              console.log(`  ✅ Added poly_id ${doc.poly_id} from doctor ${doc.name} schedule`)
             }
           }
         })
         
-        console.log('📊 Final poly IDs with today schedule:', [...polyIds])
+        console.log('📊 Final poly IDs with doctor schedules today:', [...polyIds])
         return polyIds
       }
       

@@ -59,7 +59,7 @@ defineExpose({ refresh })
         <AlertCircle class="w-12 h-12 text-red-500 mx-auto mb-4" />
         <h3 class="text-lg font-semibold mb-2">Gagal Memuat Data</h3>
         <p class="text-gray-600 mb-4">
-          Tidak dapat terhubung ke server. Pastikan backend API berjalan di http://localhost:8000
+          Tidak dapat terhubung ke server. Silakan coba lagi beberapa saat lagi.
         </p>
         <button
           @click="refresh"

@@ -22,65 +22,112 @@ const ticketToDelete = ref(null)
 const calledTicket = ref(null)
 
 // Vibration control
-let vibrationInterval = null
-const isVibrating = ref(false)
+let notificationInterval = null
+const isNotifying = ref(false)
+let notificationAudio = null
 
 const { checkQueueStatus, checkTicketInQueue } = useQueueStatusCheck()
 
-// Start vibration pattern (repeating)
-const startVibration = () => {
-  // Check if vibration API is supported
-  if (!navigator.vibrate) {
-    console.log('📳 Vibration API not supported')
-    return
+// Initialize notification audio using Web Audio API
+const initAudio = () => {
+  if (typeof window === 'undefined') return
+  
+  try {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)()
+    notificationAudio = { audioContext, isWebAudio: true }
+    console.log('🔊 Audio notification initialized')
+  } catch (e) {
+    console.log('🔊 Web Audio API not available')
+    notificationAudio = null
   }
-  
-  if (isVibrating.value) return // Already vibrating
-  
-  // Stop any existing vibration first
-  stopVibration()
-  
-  console.log('📳 Starting vibration for CALLED status')
-  isVibrating.value = true
-  
-  // Vibrate immediately with pattern: vibrate-pause-vibrate-pause-vibrate
-  navigator.vibrate([200, 100, 200, 100, 200])
-  
-  // Repeat vibration every 3 seconds
-  vibrationInterval = setInterval(() => {
-    navigator.vibrate([200, 100, 200, 100, 200])
-  }, 3000)
 }
 
-// Stop vibration
-const stopVibration = () => {
-  if (vibrationInterval) {
-    clearInterval(vibrationInterval)
-    vibrationInterval = null
+// Play notification sound (3 beeps)
+const playNotificationSound = () => {
+  if (!notificationAudio) {
+    initAudio()
   }
-  // Cancel any ongoing vibration
+  
+  if (!notificationAudio?.isWebAudio) return
+  
+  try {
+    const { audioContext } = notificationAudio
+    
+    // Play 3 ascending beeps
+    const playBeep = (frequency, delay) => {
+      setTimeout(() => {
+        const oscillator = audioContext.createOscillator()
+        const gainNode = audioContext.createGain()
+        oscillator.connect(gainNode)
+        gainNode.connect(audioContext.destination)
+        oscillator.frequency.value = frequency
+        oscillator.type = 'sine'
+        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime)
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.4)
+        oscillator.start(audioContext.currentTime)
+        oscillator.stop(audioContext.currentTime + 0.4)
+      }, delay)
+    }
+    
+    playBeep(880, 0)
+    playBeep(880, 200)
+    playBeep(1100, 400)
+    
+    console.log('🔊 Playing notification beep')
+  } catch (e) {
+    console.log('🔊 Error playing sound:', e.message)
+  }
+}
+
+// Start notification (vibration + sound)
+const startNotification = () => {
+  if (isNotifying.value) return
+  
+  stopNotification()
+  
+  console.log('🔔 Starting CALLED notification')
+  isNotifying.value = true
+  
+  // Try vibration (Android)
+  if (navigator.vibrate) {
+    navigator.vibrate([200, 100, 200, 100, 200])
+  }
+  
+  // Play sound (all devices including iPhone)
+  playNotificationSound()
+  
+  // Repeat every 4 seconds
+  notificationInterval = setInterval(() => {
+    if (navigator.vibrate) {
+      navigator.vibrate([200, 100, 200, 100, 200])
+    }
+    playNotificationSound()
+  }, 4000)
+}
+
+// Stop notification
+const stopNotification = () => {
+  if (notificationInterval) {
+    clearInterval(notificationInterval)
+    notificationInterval = null
+  }
   if (navigator.vibrate) {
     navigator.vibrate(0)
   }
-  isVibrating.value = false
-  console.log('📳 Vibration stopped')
+  isNotifying.value = false
+  console.log('🔔 Notification stopped')
 }
 
-// Watch for any ticket becoming CALLED or changing from CALLED
+// Watch for any ticket becoming CALLED
 watch(ticketsWithStatus, (newTickets, oldTickets) => {
-  // Check if any ticket just became CALLED
   const hasCalledTicket = newTickets.some(t => t.status === 'CALLED')
   const hadCalledTicket = oldTickets?.some(t => t.status === 'CALLED') || false
-  
-  // Check if all CALLED tickets are now SERVING/CANCELLED/DONE
   const allCalledNowServing = !hasCalledTicket && hadCalledTicket
   
-  if (hasCalledTicket && !isVibrating.value) {
-    // A ticket is CALLED and we're not vibrating - start vibration
-    startVibration()
+  if (hasCalledTicket && !isNotifying.value) {
+    startNotification()
   } else if (allCalledNowServing) {
-    // All CALLED tickets are now gone - stop vibration
-    stopVibration()
+    stopNotification()
   }
 }, { deep: true })
 

@@ -10,55 +10,145 @@ const activeTicket = ref(null)
 const allTicketsCount = ref(0)
 const loading = ref(true)
 const statusData = ref(null)
-const previousStatus = ref(null) // Track previous status for vibration trigger
+const previousStatus = ref(null) // Track previous status for notification trigger
 let pollInterval = null
-let vibrationInterval = null // For continuous vibration
+let notificationInterval = null // For continuous notification
+let notificationAudio = null // Audio element for notification sound
 
-// Start vibration pattern (repeating)
-const startVibration = () => {
-  // Check if vibration API is supported
-  if (!navigator.vibrate) {
-    console.log('📳 Vibration API not supported')
-    return
+// Initialize notification audio
+const initAudio = () => {
+  if (typeof window === 'undefined') return
+  
+  // Create audio element with a notification sound
+  // Using Web Audio API beep as fallback if no audio file
+  try {
+    notificationAudio = new Audio()
+    // Use a data URI for a simple beep sound (works without external file)
+    // This is a short 440Hz beep tone
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)()
+    const oscillator = audioContext.createOscillator()
+    const gainNode = audioContext.createGain()
+    
+    oscillator.connect(gainNode)
+    gainNode.connect(audioContext.destination)
+    
+    oscillator.frequency.value = 880 // Hz - higher pitched beep
+    oscillator.type = 'sine'
+    gainNode.gain.value = 0.3
+    
+    notificationAudio = { audioContext, oscillator, gainNode, isWebAudio: true }
+    console.log('🔊 Audio notification initialized (Web Audio API)')
+  } catch (e) {
+    console.log('🔊 Web Audio API not available, using fallback')
+    notificationAudio = null
   }
-  
-  // Stop any existing vibration
-  stopVibration()
-  
-  console.log('📳 Starting vibration for CALLED status')
-  
-  // Vibrate immediately
-  navigator.vibrate([200, 100, 200, 100, 200])
-  
-  // Repeat vibration every 3 seconds
-  vibrationInterval = setInterval(() => {
-    navigator.vibrate([200, 100, 200, 100, 200])
-  }, 3000)
 }
 
-// Stop vibration
-const stopVibration = () => {
-  if (vibrationInterval) {
-    clearInterval(vibrationInterval)
-    vibrationInterval = null
+// Play notification sound
+const playNotificationSound = () => {
+  if (!notificationAudio) {
+    initAudio()
+  }
+  
+  try {
+    if (notificationAudio?.isWebAudio) {
+      // Web Audio API beep
+      const { audioContext } = notificationAudio
+      const oscillator = audioContext.createOscillator()
+      const gainNode = audioContext.createGain()
+      
+      oscillator.connect(gainNode)
+      gainNode.connect(audioContext.destination)
+      
+      oscillator.frequency.value = 880
+      oscillator.type = 'sine'
+      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime)
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5)
+      
+      oscillator.start(audioContext.currentTime)
+      oscillator.stop(audioContext.currentTime + 0.5)
+      
+      // Play 3 beeps
+      setTimeout(() => {
+        const osc2 = audioContext.createOscillator()
+        const gain2 = audioContext.createGain()
+        osc2.connect(gain2)
+        gain2.connect(audioContext.destination)
+        osc2.frequency.value = 880
+        osc2.type = 'sine'
+        gain2.gain.setValueAtTime(0.3, audioContext.currentTime)
+        gain2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5)
+        osc2.start(audioContext.currentTime)
+        osc2.stop(audioContext.currentTime + 0.5)
+      }, 200)
+      
+      setTimeout(() => {
+        const osc3 = audioContext.createOscillator()
+        const gain3 = audioContext.createGain()
+        osc3.connect(gain3)
+        gain3.connect(audioContext.destination)
+        osc3.frequency.value = 1100
+        osc3.type = 'sine'
+        gain3.gain.setValueAtTime(0.3, audioContext.currentTime)
+        gain3.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5)
+        osc3.start(audioContext.currentTime)
+        osc3.stop(audioContext.currentTime + 0.5)
+      }, 400)
+      
+      console.log('🔊 Playing notification beep')
+    }
+  } catch (e) {
+    console.log('🔊 Error playing sound:', e.message)
+  }
+}
+
+// Start notification (vibration + sound)
+const startNotification = () => {
+  // Stop any existing notification first
+  stopNotification()
+  
+  console.log('🔔 Starting CALLED notification (vibration + sound)')
+  
+  // Try vibration (works on Android)
+  if (navigator.vibrate) {
+    navigator.vibrate([200, 100, 200, 100, 200])
+  }
+  
+  // Play sound (works on all devices including iPhone)
+  playNotificationSound()
+  
+  // Repeat every 4 seconds
+  notificationInterval = setInterval(() => {
+    if (navigator.vibrate) {
+      navigator.vibrate([200, 100, 200, 100, 200])
+    }
+    playNotificationSound()
+  }, 4000)
+}
+
+// Stop notification
+const stopNotification = () => {
+  if (notificationInterval) {
+    clearInterval(notificationInterval)
+    notificationInterval = null
   }
   // Cancel any ongoing vibration
   if (navigator.vibrate) {
     navigator.vibrate(0)
   }
-  console.log('📳 Vibration stopped')
+  console.log('🔔 Notification stopped')
 }
 
-// Watch for status changes to trigger vibration
+// Watch for status changes to trigger notification
 watch(() => statusData.value?.status, (newStatus, oldStatus) => {
   console.log('📋 Status changed:', { from: oldStatus, to: newStatus })
   
   if (newStatus === 'CALLED' && oldStatus !== 'CALLED') {
-    // Status became CALLED - start vibrating
-    startVibration()
+    // Status became CALLED - start notification
+    startNotification()
   } else if (newStatus === 'SERVING' || newStatus === 'CANCELLED' || newStatus === 'DONE' || newStatus === 'COMPLETED') {
-    // Status became SERVING, CANCELLED, or DONE - stop vibrating
-    stopVibration()
+    // Status became SERVING, CANCELLED, or DONE - stop notification
+    stopNotification()
   }
   
   previousStatus.value = newStatus
@@ -82,9 +172,9 @@ const loadTicket = async () => {
       activeTicket.value = latest
       statusData.value = result
       
-      // If already CALLED on load, start vibration
+      // If already CALLED on load, start notification
       if (result.status === 'CALLED') {
-        startVibration()
+        startNotification()
       }
     } else {
       activeTicket.value = null // Latest ticket is done
@@ -105,7 +195,7 @@ const startPolling = () => {
         statusData.value = result
       } else {
         // Ticket finished/cancelled while watching
-        stopVibration() // Make sure to stop vibration
+        stopNotification() // Make sure to stop notification
         activeTicket.value = null
         statusData.value = null
       }
@@ -127,7 +217,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (pollInterval) clearInterval(pollInterval)
-  stopVibration() // Clean up vibration on unmount
+  stopNotification() // Clean up notification on unmount
 })
 </script>
 

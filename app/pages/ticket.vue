@@ -56,6 +56,11 @@ const playNotificationSound = () => {
     // Play 3 ascending beeps
     const playBeep = (frequency, delay) => {
       setTimeout(() => {
+        // Ensure context is valid/resumed
+        if (audioContext.state === 'suspended') {
+          audioContext.resume()
+        }
+        
         const oscillator = audioContext.createOscillator()
         const gainNode = audioContext.createGain()
         oscillator.connect(gainNode)
@@ -73,11 +78,39 @@ const playNotificationSound = () => {
     playBeep(880, 200)
     playBeep(1100, 400)
     
-    console.log('🔊 Playing notification beep')
+    console.log('🔊 Playing notification beep (Web Audio)')
   } catch (e) {
     console.log('🔊 Error playing sound:', e.message)
   }
 }
+
+// Unlock audio for iOS (must be called on user interaction)
+const unlockAudio = () => {
+  if (!notificationAudio) {
+    initAudio()
+  }
+  
+  if (notificationAudio?.isWebAudio) {
+    const { audioContext } = notificationAudio
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().then(() => {
+        console.log('🔊 Audio context resumed by user interaction')
+      })
+    }
+    
+    // Play silent buffer to warm up
+    try {
+      const buffer = audioContext.createBuffer(1, 1, 22050)
+      const source = audioContext.createBufferSource()
+      source.buffer = buffer
+      source.connect(audioContext.destination)
+      source.start(0)
+    } catch (e) {
+      // Ignore
+    }
+  }
+}
+
 
 // Start notification (vibration + sound)
 const startNotification = () => {
@@ -268,20 +301,28 @@ onMounted(async () => {
   // Check if any ticket is already CALLED and start vibration
   const hasCalledTicket = ticketsWithStatus.value.some(t => t.status === 'CALLED')
   if (hasCalledTicket) {
-    startVibration()
+    startNotification()
   }
 
   // Auto-refresh every 5 seconds for faster status updates
   refreshInterval = setInterval(async () => {
     await fetchTicketStatuses()
   }, 5000)
+  
+  // Attach unlock listeners for iOS audio
+  document.addEventListener('click', unlockAudio, { once: true })
+  document.addEventListener('touchstart', unlockAudio, { once: true })
 })
 
 onUnmounted(() => {
   if (refreshInterval) {
     clearInterval(refreshInterval)
   }
-  stopVibration() // Clean up vibration on unmount
+  stopNotification() // Clean up notification on unmount
+  
+  // Remove listeners if unmounted before interaction
+  document.removeEventListener('click', unlockAudio)
+  document.removeEventListener('touchstart', unlockAudio)
 })
 
 // Format date

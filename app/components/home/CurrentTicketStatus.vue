@@ -54,6 +54,12 @@ const playNotificationSound = () => {
     if (notificationAudio?.isWebAudio) {
       // Web Audio API beep
       const { audioContext } = notificationAudio
+      
+      // Ensure context is resumed
+      if (audioContext.state === 'suspended') {
+        audioContext.resume()
+      }
+
       const oscillator = audioContext.createOscillator()
       const gainNode = audioContext.createGain()
       
@@ -99,6 +105,33 @@ const playNotificationSound = () => {
     }
   } catch (e) {
     console.log('🔊 Error playing sound:', e.message)
+  }
+}
+
+// Unlock audio for iOS (must be called on user interaction)
+const unlockAudio = () => {
+  if (!notificationAudio) {
+    initAudio()
+  }
+  
+  if (notificationAudio?.isWebAudio) {
+    const { audioContext } = notificationAudio
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().then(() => {
+        console.log('🔊 Audio context resumed by user interaction')
+      })
+    }
+    
+    // Play silent buffer to warm up
+    try {
+      const buffer = audioContext.createBuffer(1, 1, 22050)
+      const source = audioContext.createBufferSource()
+      source.buffer = buffer
+      source.connect(audioContext.destination)
+      source.start(0)
+    } catch (e) {
+      // Ignore
+    }
   }
 }
 
@@ -213,11 +246,19 @@ const viewTicket = () => {
 onMounted(() => {
   loadTicket()
   startPolling()
+  
+  // Attach unlock listeners for iOS audio
+  document.addEventListener('click', unlockAudio, { once: true })
+  document.addEventListener('touchstart', unlockAudio, { once: true })
 })
 
 onUnmounted(() => {
   if (pollInterval) clearInterval(pollInterval)
   stopNotification() // Clean up notification on unmount
+  
+  // Remove listeners if unmounted before interaction
+  document.removeEventListener('click', unlockAudio)
+  document.removeEventListener('touchstart', unlockAudio)
 })
 </script>
 

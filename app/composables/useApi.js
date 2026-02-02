@@ -15,6 +15,10 @@ export const useApi = () => {
   // This ignores any environment variables that might set full URL erroneously
   const baseURL = '/api'
   
+  if (import.meta.client) {
+    console.log('🔧 API Config:', { baseURL, timestamp: new Date().toISOString() })
+  }
+  
   return {
     baseURL
   }

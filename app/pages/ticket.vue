@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Ticket, Clock, User, CheckCircle, ArrowLeft, Trash2, RefreshCw, Bell, Sparkles } from 'lucide-vue-next'
 import { ticketStorage } from '@/utils/ticketStorage'
@@ -21,7 +21,68 @@ const ticketToDelete = ref(null)
 // Status notification
 const calledTicket = ref(null)
 
+// Vibration control
+let vibrationInterval = null
+const isVibrating = ref(false)
+
 const { checkQueueStatus, checkTicketInQueue } = useQueueStatusCheck()
+
+// Start vibration pattern (repeating)
+const startVibration = () => {
+  // Check if vibration API is supported
+  if (!navigator.vibrate) {
+    console.log('📳 Vibration API not supported')
+    return
+  }
+  
+  if (isVibrating.value) return // Already vibrating
+  
+  // Stop any existing vibration first
+  stopVibration()
+  
+  console.log('📳 Starting vibration for CALLED status')
+  isVibrating.value = true
+  
+  // Vibrate immediately with pattern: vibrate-pause-vibrate-pause-vibrate
+  navigator.vibrate([200, 100, 200, 100, 200])
+  
+  // Repeat vibration every 3 seconds
+  vibrationInterval = setInterval(() => {
+    navigator.vibrate([200, 100, 200, 100, 200])
+  }, 3000)
+}
+
+// Stop vibration
+const stopVibration = () => {
+  if (vibrationInterval) {
+    clearInterval(vibrationInterval)
+    vibrationInterval = null
+  }
+  // Cancel any ongoing vibration
+  if (navigator.vibrate) {
+    navigator.vibrate(0)
+  }
+  isVibrating.value = false
+  console.log('📳 Vibration stopped')
+}
+
+// Watch for any ticket becoming CALLED or changing from CALLED
+watch(ticketsWithStatus, (newTickets, oldTickets) => {
+  // Check if any ticket just became CALLED
+  const hasCalledTicket = newTickets.some(t => t.status === 'CALLED')
+  const hadCalledTicket = oldTickets?.some(t => t.status === 'CALLED') || false
+  
+  // Check if all CALLED tickets are now SERVING/CANCELLED/DONE
+  const allCalledNowServing = !hasCalledTicket && hadCalledTicket
+  
+  if (hasCalledTicket && !isVibrating.value) {
+    // A ticket is CALLED and we're not vibrating - start vibration
+    startVibration()
+  } else if (allCalledNowServing) {
+    // All CALLED tickets are now gone - stop vibration
+    stopVibration()
+  }
+}, { deep: true })
 
 // Load tickets from localStorage
 const loadTickets = () => {
@@ -88,11 +149,17 @@ const fetchTicketStatuses = async () => {
           const oldStatus = currentStatus
           currentStatus = queueCheck.status
           
-          // If status changed to CALLED, show notification
+          // If status changed to CALLED, show notification and start vibration
           if (oldStatus !== 'CALLED' && currentStatus === 'CALLED') {
             calledTicket.value = { ...ticket, status: 'CALLED' }
+            startVibration() // Start vibrating
             // Auto-hide notification after 5 seconds
             setTimeout(() => { calledTicket.value = null }, 5000)
+          }
+          
+          // If status changed FROM CALLED to SERVING/CANCELLED, stop vibration
+          if (oldStatus === 'CALLED' && (currentStatus === 'SERVING' || currentStatus === 'CANCELLED' || currentStatus === 'DONE')) {
+            stopVibration()
           }
           
           // Update localStorage with new status
@@ -151,6 +218,12 @@ onMounted(async () => {
   await fetchTicketStatuses()
   loading.value = false
 
+  // Check if any ticket is already CALLED and start vibration
+  const hasCalledTicket = ticketsWithStatus.value.some(t => t.status === 'CALLED')
+  if (hasCalledTicket) {
+    startVibration()
+  }
+
   // Auto-refresh every 5 seconds for faster status updates
   refreshInterval = setInterval(async () => {
     await fetchTicketStatuses()
@@ -161,6 +234,7 @@ onUnmounted(() => {
   if (refreshInterval) {
     clearInterval(refreshInterval)
   }
+  stopVibration() // Clean up vibration on unmount
 })
 
 // Format date

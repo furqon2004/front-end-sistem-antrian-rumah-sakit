@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { Ticket, Users, Clock, AlertCircle } from 'lucide-vue-next'
 import { ticketStorage } from '@/utils/ticketStorage'
 
@@ -10,7 +10,59 @@ const activeTicket = ref(null)
 const allTicketsCount = ref(0)
 const loading = ref(true)
 const statusData = ref(null)
+const previousStatus = ref(null) // Track previous status for vibration trigger
 let pollInterval = null
+let vibrationInterval = null // For continuous vibration
+
+// Start vibration pattern (repeating)
+const startVibration = () => {
+  // Check if vibration API is supported
+  if (!navigator.vibrate) {
+    console.log('📳 Vibration API not supported')
+    return
+  }
+  
+  // Stop any existing vibration
+  stopVibration()
+  
+  console.log('📳 Starting vibration for CALLED status')
+  
+  // Vibrate immediately
+  navigator.vibrate([200, 100, 200, 100, 200])
+  
+  // Repeat vibration every 3 seconds
+  vibrationInterval = setInterval(() => {
+    navigator.vibrate([200, 100, 200, 100, 200])
+  }, 3000)
+}
+
+// Stop vibration
+const stopVibration = () => {
+  if (vibrationInterval) {
+    clearInterval(vibrationInterval)
+    vibrationInterval = null
+  }
+  // Cancel any ongoing vibration
+  if (navigator.vibrate) {
+    navigator.vibrate(0)
+  }
+  console.log('📳 Vibration stopped')
+}
+
+// Watch for status changes to trigger vibration
+watch(() => statusData.value?.status, (newStatus, oldStatus) => {
+  console.log('📋 Status changed:', { from: oldStatus, to: newStatus })
+  
+  if (newStatus === 'CALLED' && oldStatus !== 'CALLED') {
+    // Status became CALLED - start vibrating
+    startVibration()
+  } else if (newStatus === 'SERVING' || newStatus === 'CANCELLED' || newStatus === 'DONE' || newStatus === 'COMPLETED') {
+    // Status became SERVING, CANCELLED, or DONE - stop vibrating
+    stopVibration()
+  }
+  
+  previousStatus.value = newStatus
+})
 
 // Load ticket from storage
 const loadTicket = async () => {
@@ -29,6 +81,11 @@ const loadTicket = async () => {
     if (result.exists && result.status !== 'DONE' && result.status !== 'CANCELLED' && result.status !== 'COMPLETED') {
       activeTicket.value = latest
       statusData.value = result
+      
+      // If already CALLED on load, start vibration
+      if (result.status === 'CALLED') {
+        startVibration()
+      }
     } else {
       activeTicket.value = null // Latest ticket is done
     }
@@ -48,6 +105,7 @@ const startPolling = () => {
         statusData.value = result
       } else {
         // Ticket finished/cancelled while watching
+        stopVibration() // Make sure to stop vibration
         activeTicket.value = null
         statusData.value = null
       }
@@ -69,6 +127,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (pollInterval) clearInterval(pollInterval)
+  stopVibration() // Clean up vibration on unmount
 })
 </script>
 

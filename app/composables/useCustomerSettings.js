@@ -22,7 +22,7 @@ const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
 
 export const useCustomerSettings = () => {
   // Get baseURL safely - handle case where useApi may not be available yet
-  let baseURL = 'https://hospital-queue-api.codewithdanu.my.id/api'
+  let baseURL = '/api'  // Default to proxy path
   try {
     const api = useApi()
     if (api?.baseURL) {

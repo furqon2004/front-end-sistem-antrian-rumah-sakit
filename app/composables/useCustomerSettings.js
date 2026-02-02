@@ -21,23 +21,9 @@ let settingsCacheTime = 0
 const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
 
 export const useCustomerSettings = () => {
-  // Get baseURL safely - handle case where useApi may not be available yet
-  let baseURL = '/api'  // Default to proxy path
-  try {
-    const api = useApi()
-    if (api?.baseURL) {
-      baseURL = api.baseURL
-    }
-  } catch (e) {
-    // Fallback: try to get from runtime config directly
-    try {
-      const config = useRuntimeConfig()
-      baseURL = config.public?.apiBase || baseURL
-    } catch (e2) {
-      // Use default baseURL
-      console.log('Using default API URL')
-    }
-  }
+  // Force use of /api proxy path to avoid CORS issues
+  // This ignores any environment variables that might set full URL erroneously
+  let baseURL = '/api'
   
   /**
    * Try to get settings from localStorage

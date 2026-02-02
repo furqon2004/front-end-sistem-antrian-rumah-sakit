@@ -11,7 +11,9 @@ export const useApi = () => {
   
   // Base URL for API calls - uses proxy path
   // Nitro will proxy /api/** to https://hospital-queue-api.codewithdanu.my.id/api/**
-  const baseURL = config.public.apiBase || '/api'
+  // Force use of /api proxy path to avoid CORS issues
+  // This ignores any environment variables that might set full URL erroneously
+  const baseURL = '/api'
   
   return {
     baseURL

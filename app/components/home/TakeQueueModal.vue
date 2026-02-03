@@ -41,9 +41,25 @@ const fetchGeofenceSettings = async () => {
   geofenceLoading.value = false
 }
 
+const handlePhoneInput = (e) => {
+  // Remove non-numeric chars
+  let value = e.target.value.replace(/\D/g, '')
+  // Limit to 15 digits
+  if (value.length > 15) {
+    value = value.slice(0, 15)
+  }
+  phoneNumber.value = value
+}
+
 const submitForm = async () => {
   if (!phoneNumber.value.trim()) {
     error.value = 'Nomor HP wajib diisi'
+    return
+  }
+  
+  // Basic validation for minimum length (e.g. 10 digits for Indonesia)
+  if (phoneNumber.value.length < 10) {
+    error.value = 'Nomor HP minimal 10 digit'
     return
   }
 
@@ -156,7 +172,10 @@ onMounted(() => {
             <Phone class="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               v-model="phoneNumber"
+              @input="handlePhoneInput"
               type="tel"
+              maxlength="15"
+              pattern="[0-9]*"
               placeholder="08xxxxxxxxxx"
               class="w-full pl-10 pr-4 py-3 rounded-lg border focus:ring-2 focus:ring-black focus:outline-none"
               :disabled="isSubmitting"

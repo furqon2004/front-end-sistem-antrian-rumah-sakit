@@ -45,8 +45,8 @@ const handlePhoneInput = (e) => {
   // Remove non-numeric chars
   let value = e.target.value.replace(/\D/g, '')
   // Limit to 15 digits
-  if (value.length > 15) {
-    value = value.slice(0, 15)
+  if (value.length > 13) {
+    value = value.slice(0, 13)
   }
   phoneNumber.value = value
 }
@@ -174,7 +174,7 @@ onMounted(() => {
               v-model="phoneNumber"
               @input="handlePhoneInput"
               type="tel"
-              maxlength="15"
+              maxlength="13"
               pattern="[0-9]*"
               placeholder="08xxxxxxxxxx"
               class="w-full pl-10 pr-4 py-3 rounded-lg border focus:ring-2 focus:ring-black focus:outline-none"

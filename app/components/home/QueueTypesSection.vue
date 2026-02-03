@@ -1,12 +1,24 @@
 <script setup>
 import QueueTypeCard from '@/components/queue/QueueTypeCard.vue'
-import { Loader2, AlertCircle } from 'lucide-vue-next'
-import { onMounted, onUnmounted, computed } from 'vue'
+import ScheduleModal from '@/components/queue/ScheduleModal.vue'
+import { Loader2, AlertCircle, Calendar } from 'lucide-vue-next'
+import { onMounted, onUnmounted, computed, ref } from 'vue'
 
 const emit = defineEmits(['selectQueue'])
 
 // Fetch queue types from API
 const { queueTypes, loading, error, refresh } = useQueueTypes()
+
+// Modal State
+const showScheduleModal = ref(false)
+// We don't need selectedPoly here anymore as the modal will handle selection/listing
+const selectedPoly = ref({ id: null, name: '' })
+
+const openScheduleModal = () => {
+  // Reset selected poly so modal starts fresh or shows default
+  selectedPoly.value = { id: null, name: '' }
+  showScheduleModal.value = true
+}
 
 // Filter only active queue types
 const activeQueueTypes = computed(() => {
@@ -38,12 +50,24 @@ defineExpose({ refresh })
 <template>
   <section class="py-20 bg-gray-50">
     <div class="max-w-7xl mx-auto px-4 md:px-6">
-    <h2 class="text-3xl font-bold mb-2">
-      Jenis Layanan Antrian
-    </h2>
-    <p class="text-gray-600 mb-10">
-      Pilih jenis layanan yang Anda butuhkan
-    </p>
+    <div class="flex flex-col md:flex-row md:items-end justify-between mb-10 gap-4">
+      <div>
+        <h2 class="text-3xl font-bold mb-2">
+          Jenis Layanan Antrian
+        </h2>
+        <p class="text-gray-600">
+          Pilih jenis layanan yang Anda butuhkan
+        </p>
+      </div>
+      
+      <button
+        @click="openScheduleModal"
+        class="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm font-medium"
+      >
+        <Calendar class="w-5 h-5 text-blue-600" />
+        Lihat Seluruh Jadwal 
+      </button>
+    </div>
 
     <!-- Loading State -->
     <div v-if="loading" class="flex items-center justify-center py-20">
@@ -85,5 +109,13 @@ defineExpose({ refresh })
       />
     </div>
     </div>
+
+    <!-- Schedule Modal -->
+    <ScheduleModal
+      :show="showScheduleModal"
+      :poly-id="selectedPoly.id"
+      :poly-name="selectedPoly.name"
+      @close="showScheduleModal = false"
+    />
   </section>
 </template>

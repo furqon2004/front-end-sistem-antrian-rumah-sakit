@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { History, Clock, ArrowLeft, Trash2, CheckCircle } from 'lucide-vue-next'
+import { History, Clock, ArrowLeft, Trash2, CheckCircle, Home } from 'lucide-vue-next'
 import { ticketStorage } from '@/utils/ticketStorage'
 import Header from '@/components/layout/Header.vue'
 import ConfirmModal from '@/components/common/ConfirmModal.vue'
@@ -81,6 +81,14 @@ const confirmClearHistory = () => {
           </div>
           
           <div class="flex gap-2">
+            <button
+              @click="goHome"
+              class="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition text-sm"
+            >
+              <Home class="w-4 h-4" />
+              <span class="hidden sm:inline">Beranda</span>
+            </button>
+
             <button
               v-if="historyTickets.length > 0"
               @click="openClearConfirm"

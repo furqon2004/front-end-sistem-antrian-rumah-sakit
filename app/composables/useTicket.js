@@ -81,12 +81,13 @@ export const useTicket = () => {
 
   /**
    * Create a new ticket
-   * @param {string} name - Patient name
+   * @param {string} phoneNumber - Patient phone number (mandatory)
+   * @param {string} name - Patient name (optional)
    * @param {Object} queueType - Queue type object
    * @param {string} paymentType - Payment type ('BPJS' or 'UMUM')
    * @param {string|null} doctorId - Optional doctor ID if customer selects specific doctor
    */
-  const createTicket = async (name, queueType, paymentType = 'UMUM', doctorId = null) => {
+  const createTicket = async (phoneNumber, name, queueType, paymentType = 'UMUM', doctorId = null) => {
     try {
       // Sync latest statuses first to ensure we don't block false positives
       await syncTicketStatuses()
@@ -174,7 +175,9 @@ export const useTicket = () => {
         },
         body: {
           queue_type_id: queueType.id,
-          patient_name: name,
+          // If name is explicitly provided, use it. Otherwise backend might handle it or we send empty string/default
+          patient_name: name || 'Pasien', 
+          phone_number: phoneNumber, // NEW: Include phone number
           payment_type: paymentType, // 'BPJS' or 'UMUM'
           doctor_id: doctorId, // NEW: Optional selected doctor
           latitude: locationToSend.latitude,
@@ -223,7 +226,8 @@ export const useTicket = () => {
           issued_at: ticketData.issued_at,
           
           // Patient info
-          patient_name: name,
+          patient_name: name || ticketData.patient_name || 'Pasien',
+          patient_phone: phoneNumber, // Save phone number locally
           payment_type: paymentType, // 'BPJS' or 'UMUM'
           
           // Timestamps

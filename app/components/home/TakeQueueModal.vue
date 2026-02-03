@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, onMounted, computed } from 'vue'
-import { User, X, MapPin } from 'lucide-vue-next'
+import { User, X, MapPin, Phone } from 'lucide-vue-next'
 
 const props = defineProps({
   queueType: Object,
@@ -10,7 +10,7 @@ const props = defineProps({
 const emit = defineEmits(['close', 'ticketTaken'])
 
 const name = ref('')
-const paymentType = ref('UMUM') // Default to UMUM
+const phoneNumber = ref('')
 const error = ref('')
 const isSubmitting = ref(false)
 
@@ -42,13 +42,8 @@ const fetchGeofenceSettings = async () => {
 }
 
 const submitForm = async () => {
-  if (!name.value.trim()) {
-    error.value = 'Nama wajib diisi'
-    return
-  }
-
-  if (!paymentType.value) {
-    error.value = 'Pilih jenis pembayaran terlebih dahulu'
+  if (!phoneNumber.value.trim()) {
+    error.value = 'Nomor HP wajib diisi'
     return
   }
 
@@ -60,9 +55,10 @@ const submitForm = async () => {
   isSubmitting.value = true
 
   try {
-    // Don't send doctor_id from frontend - let backend decide doctor assignment
-    // This allows backend to distribute tickets evenly among available doctors
-    const result = await createTicket(name.value, props.queueType, paymentType.value, null)
+    // Pass phoneNumber as first arg, name as second. 
+    // Payment type hardcoded to 'UMUM' as per request to remove selection.
+    // Doctor ID is null (auto-assign).
+    const result = await createTicket(phoneNumber.value, name.value, props.queueType, 'UMUM', null)
 
     if (result.success) {
       // Emit event to refresh queue data
@@ -73,6 +69,7 @@ const submitForm = async () => {
       
       // Reset form
       name.value = ''
+      phoneNumber.value = ''
       emit('close')
     } else {
       error.value = result.error || 'Gagal membuat tiket'
@@ -92,7 +89,7 @@ watch(() => props.show, async (newVal) => {
     fetchGeofenceSettings()
   } else {
     name.value = ''
-    paymentType.value = 'UMUM'
+    phoneNumber.value = ''
     error.value = ''
   }
 })
@@ -150,8 +147,25 @@ onMounted(() => {
       <!-- FORM -->
       <form @submit.prevent="submitForm" class="space-y-6">
         <div>
+          <!-- Phone Number Input (Mandatory) -->
           <label class="block text-sm font-medium mb-1">
-            Nama Pasien
+            Nomor HP <span class="text-red-500">*</span>
+          </label>
+
+          <div class="relative mb-4">
+            <Phone class="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              v-model="phoneNumber"
+              type="tel"
+              placeholder="08xxxxxxxxxx"
+              class="w-full pl-10 pr-4 py-3 rounded-lg border focus:ring-2 focus:ring-black focus:outline-none"
+              :disabled="isSubmitting"
+            />
+          </div>
+
+          <!-- Name Input (Optional) -->
+          <label class="block text-sm font-medium mb-1">
+            Nama Pasien <span class="text-gray-400 font-normal">(Opsional)</span>
           </label>
 
           <div class="relative">
@@ -159,41 +173,10 @@ onMounted(() => {
             <input
               v-model="name"
               type="text"
-              placeholder="Masukkan nama lengkap"
+              placeholder="Masukkan nama (opsional)"
               class="w-full pl-10 pr-4 py-3 rounded-lg border focus:ring-2 focus:ring-black focus:outline-none"
               :disabled="isSubmitting"
             />
-          </div>
-
-          <!-- Payment Type Selection -->
-          <div class="mt-4">
-            <label class="block text-sm font-medium mb-2">
-              Jenis Pembayaran
-            </label>
-            
-            <div class="flex gap-4">
-              <label class="flex items-center gap-2 cursor-pointer">
-                <input 
-                  type="radio" 
-                  v-model="paymentType" 
-                  value="BPJS" 
-                  class="w-4 h-4 text-black focus:ring-black"
-                  :disabled="isSubmitting"
-                />
-                <span class="text-sm">BPJS</span>
-              </label>
-              
-              <label class="flex items-center gap-2 cursor-pointer">
-                <input 
-                  type="radio" 
-                  v-model="paymentType" 
-                  value="UMUM" 
-                  class="w-4 h-4 text-black focus:ring-black"
-                  :disabled="isSubmitting"
-                />
-                <span class="text-sm">Umum</span>
-              </label>
-            </div>
           </div>
 
           <p v-if="error" class="text-sm text-red-500 mt-2">
